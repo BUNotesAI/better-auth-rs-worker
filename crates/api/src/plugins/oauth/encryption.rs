@@ -4,10 +4,12 @@
 //! refresh tokens, and ID tokens are encrypted before being persisted and
 //! decrypted transparently on read.
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
 use hkdf::Hkdf;
+#[cfg(feature = "native-crypto")]
+use rand::RngCore;
 use sha2::Sha256;
 
 use better_auth_core::AuthError;
@@ -32,20 +34,49 @@ fn derive_key(secret: &str) -> Key<Aes256Gcm> {
 /// Encrypt a plaintext string using AES-256-GCM.
 ///
 /// Returns a base64-encoded string of `nonce || ciphertext`.
-pub fn encrypt_token(plaintext: &str, secret: &str) -> Result<String, AuthError> {
+fn encrypt_token_with_nonce(
+    plaintext: &str,
+    secret: &str,
+    nonce_bytes: &[u8; 12],
+) -> Result<String, AuthError> {
     let key = derive_key(secret);
     let cipher = Aes256Gcm::new(&key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = Nonce::from_slice(nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(&nonce, plaintext.as_bytes())
+        .encrypt(nonce, plaintext.as_bytes())
         .map_err(|e| AuthError::internal(format!("Token encryption failed: {}", e)))?;
 
     // Prepend nonce (12 bytes) to ciphertext
-    let mut combined = nonce.to_vec();
+    let mut combined = nonce_bytes.to_vec();
     combined.extend_from_slice(&ciphertext);
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&combined))
+}
+
+fn fill_native_nonce(nonce: &mut [u8; 12]) -> Result<(), AuthError> {
+    #[cfg(feature = "native-crypto")]
+    {
+        rand::rngs::OsRng.fill_bytes(nonce);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "native-crypto"))]
+    {
+        let _ = nonce;
+        Err(AuthError::config(
+            "OAuth token encryption requires injected SecureRandom capability",
+        ))
+    }
+}
+
+/// Encrypt a plaintext string using AES-256-GCM.
+///
+/// Returns a base64-encoded string of `nonce || ciphertext`.
+pub fn encrypt_token(plaintext: &str, secret: &str) -> Result<String, AuthError> {
+    let mut nonce = [0u8; 12];
+    fill_native_nonce(&mut nonce)?;
+    encrypt_token_with_nonce(plaintext, secret, &nonce)
 }
 
 /// Decrypt a base64-encoded `nonce || ciphertext` string using AES-256-GCM.
@@ -117,6 +148,42 @@ pub struct EncryptedTokenSet {
     pub id_token: Option<String>,
 }
 
+fn fill_token_nonce<DB: better_auth_core::DatabaseAdapter>(
+    ctx: &better_auth_core::AuthContext<DB>,
+    nonce: &mut [u8; 12],
+) -> Result<(), AuthError> {
+    match ctx.config.runtime.secure_random.fill_bytes(nonce) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            #[cfg(feature = "native-crypto")]
+            {
+                if matches!(err, AuthError::Config(_)) {
+                    rand::rngs::OsRng.fill_bytes(nonce);
+                    return Ok(());
+                }
+            }
+
+            Err(err)
+        }
+    }
+}
+
+fn maybe_encrypt_from_context<DB: better_auth_core::DatabaseAdapter>(
+    ctx: &better_auth_core::AuthContext<DB>,
+    value: Option<String>,
+    encrypt: bool,
+    secret: &str,
+) -> Result<Option<String>, AuthError> {
+    match (value, encrypt) {
+        (Some(v), true) => {
+            let mut nonce = [0u8; 12];
+            fill_token_nonce(ctx, &mut nonce)?;
+            Ok(Some(encrypt_token_with_nonce(&v, secret, &nonce)?))
+        }
+        (v, _) => Ok(v),
+    }
+}
+
 /// Read `encrypt_oauth_tokens` and `secret` from the auth context and
 /// conditionally encrypt a full set of OAuth tokens in one call.
 pub fn encrypt_token_set<DB: better_auth_core::DatabaseAdapter>(
@@ -128,9 +195,9 @@ pub fn encrypt_token_set<DB: better_auth_core::DatabaseAdapter>(
     let encrypt = ctx.config.account.encrypt_oauth_tokens;
     let secret = &ctx.config.secret;
     Ok(EncryptedTokenSet {
-        access_token: maybe_encrypt(access_token, encrypt, secret)?,
-        refresh_token: maybe_encrypt(refresh_token, encrypt, secret)?,
-        id_token: maybe_encrypt(id_token, encrypt, secret)?,
+        access_token: maybe_encrypt_from_context(ctx, access_token, encrypt, secret)?,
+        refresh_token: maybe_encrypt_from_context(ctx, refresh_token, encrypt, secret)?,
+        id_token: maybe_encrypt_from_context(ctx, id_token, encrypt, secret)?,
     })
 }
 

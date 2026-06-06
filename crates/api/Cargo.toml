@@ -7,7 +7,7 @@ description = "Plugin implementations for better-auth"
 repository = { workspace = true }
 
 [dependencies]
-better-auth-core = { workspace = true, features = ["derive"] }
+better-auth-core = { workspace = true, default-features = false, features = ["derive"] }
 
 # Asynchronous runtime
 async-trait = { workspace = true }
@@ -26,30 +26,29 @@ chrono = { workspace = true }
 cookie = { workspace = true }
 
 # Data structures
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, optional = true, features = ["v4"] }
 
 # Crypto
-argon2 = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, optional = true }
 base64 = { workspace = true }
-totp-rs = { workspace = true }
+totp-rs = { workspace = true, optional = true }
 
 # Logging
 tracing = { workspace = true }
 
 # HTTP client
-reqwest = { workspace = true }
+reqwest = { workspace = true, optional = true }
 
 # URL
 url = { workspace = true }
 urlencoding = "2"
 bon = "3.3"
-governor = "0.10.4"
-nonzero_ext = "0.3.0"
+governor = { version = "0.10.4", optional = true }
+nonzero_ext = { version = "0.3.0", optional = true }
 axum = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -58,13 +57,41 @@ tokio = { workspace = true }
 [features]
 default = ["native-tls"]
 local-futures = ["better-auth-core/local-futures"]
+admin = []
+api-key = ["dep:governor", "dep:nonzero_ext", "dep:rand"]
+device-authorization = ["dep:rand"]
+email-verification = ["dep:uuid"]
+native-plugins = [
+    "admin",
+    "api-key",
+    "device-authorization",
+    "email-verification",
+    "organization",
+    "passkey",
+    "password-management",
+    "two-factor",
+    "user-management",
+]
+oauth-native-http = ["dep:reqwest"]
+native-crypto = ["dep:rand"]
+organization = []
+passkey = ["dep:rand"]
+password-management = ["dep:uuid"]
+two-factor = ["dep:rand", "dep:totp-rs"]
+user-management = ["dep:uuid"]
 native-tls = [
+    "native-plugins",
+    "native-crypto",
+    "oauth-native-http",
     "reqwest/default-tls",
     "better-auth-core/jwt",
     "better-auth-core/password-argon2",
     "better-auth-core/native-id",
 ]
 rustls = [
+    "native-plugins",
+    "native-crypto",
+    "oauth-native-http",
     "reqwest/rustls-tls",
     "better-auth-core/jwt",
     "better-auth-core/password-argon2",

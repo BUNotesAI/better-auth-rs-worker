@@ -19,7 +19,7 @@ repository = "https://github.com/better-auth-rs/better-auth-rs"
 
 [workspace.dependencies]
 # Sub-crates
-better-auth-core = { version = "0.10.0", path = "crates/core" }
+better-auth-core = { version = "0.10.0", path = "crates/core", default-features = false }
 better-auth-api = { version = "0.10.0", path = "crates/api", default-features = false }
 better-auth-derive = { version = "0.10.0", path = "crates/derive" }
 
@@ -65,7 +65,7 @@ rand = "0.8"
 base64 = "0.22"
 jsonwebtoken = "9"
 sha2 = "0.10"
-aes-gcm = "0.10"
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 hkdf = "0.12"
 hmac = "0.12"
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }

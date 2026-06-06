@@ -10,11 +10,15 @@ use better_auth_core::plugin::{AuthState, AxumPlugin};
 
 pub mod encryption;
 mod handlers;
+#[cfg(feature = "oauth-native-http")]
+mod http;
 mod providers;
 #[cfg(test)]
 mod tests;
 mod types;
 
+#[cfg(feature = "oauth-native-http")]
+pub use http::ReqwestOAuthHttpClient;
 pub use providers::{OAuthConfig, OAuthProvider, OAuthStateStrategy, OAuthUserInfo};
 
 pub struct OAuthPlugin {

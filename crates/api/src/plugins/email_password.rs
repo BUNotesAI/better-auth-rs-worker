@@ -12,9 +12,13 @@ use better_auth_core::{
     PASSWORD_HASH_KEY,
 };
 
+#[cfg(feature = "email-verification")]
 use super::email_verification::EmailVerificationPlugin;
 use better_auth_core::utils::cookie_utils::create_session_cookie;
 use better_auth_core::utils::password::{self as password_utils, SharedPasswordHasher};
+
+#[cfg(not(feature = "email-verification"))]
+pub(crate) struct EmailVerificationPlugin;
 /// Email and password authentication plugin
 pub struct EmailPasswordPlugin {
     config: EmailPasswordConfig,
@@ -142,6 +146,7 @@ impl EmailPasswordPlugin {
 
     /// Attach an [`EmailVerificationPlugin`] so that `send_on_sign_in` is
     /// automatically called when a user signs in with an unverified email.
+    #[cfg(feature = "email-verification")]
     pub fn with_email_verification(mut self, plugin: Arc<EmailVerificationPlugin>) -> Self {
         self.email_verification = Some(plugin);
         self
@@ -401,16 +406,22 @@ async fn sign_in_with_user_core<DB: DatabaseAdapter>(
     }
 
     // Send verification email on sign-in if configured
-    if let Some(ev) = email_verification
-        && let Err(e) = ev
-            .send_verification_on_sign_in(&user, callback_url, ctx)
-            .await
+    #[cfg(feature = "email-verification")]
     {
-        tracing::warn!(
-            error = %e,
-            "Failed to send verification email on sign-in"
-        );
+        if let Some(ev) = email_verification
+            && let Err(e) = ev
+                .send_verification_on_sign_in(&user, callback_url, ctx)
+                .await
+        {
+            tracing::warn!(
+                error = %e,
+                "Failed to send verification email on sign-in"
+            );
+        }
     }
+
+    #[cfg(not(feature = "email-verification"))]
+    let _ = email_verification;
 
     // Create session
     let session = ctx

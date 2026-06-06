@@ -1,13 +1,16 @@
 use base64::Engine;
-use chrono::{Duration, Utc};
-use rand::distributions::Alphanumeric;
-use rand::{Rng, thread_rng};
+#[cfg(feature = "oauth-native-http")]
+use better_auth_core::OAuthHttpClient;
+use chrono::Duration;
+#[cfg(feature = "native-crypto")]
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 use better_auth_core::entity::{AuthAccount, AuthSession, AuthUser, AuthVerification};
 use better_auth_core::{
     AuthContext, AuthError, AuthRequest, AuthResponse, AuthResult, CreateAccount, CreateUser,
-    CreateVerification, DatabaseAdapter, UpdateAccount, UpdateUser,
+    CreateVerification, DatabaseAdapter, HttpMethod, IdKind, OAuthHttpRequest, OAuthHttpResponse,
+    UpdateAccount, UpdateUser,
 };
 
 use super::encryption::{encrypt_token_set, maybe_decrypt};
@@ -72,16 +75,118 @@ fn find_account_for_provider<'a, A: AuthAccount>(
         })
 }
 
-fn generate_pkce() -> (String, String) {
-    let verifier: String = thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(43)
-        .map(char::from)
-        .collect();
+fn fill_oauth_random<DB: DatabaseAdapter>(
+    ctx: &AuthContext<DB>,
+    dest: &mut [u8],
+) -> AuthResult<()> {
+    match ctx.config.runtime.secure_random.fill_bytes(dest) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            #[cfg(feature = "native-crypto")]
+            {
+                if matches!(err, AuthError::Config(_)) {
+                    rand::rngs::OsRng.fill_bytes(dest);
+                    return Ok(());
+                }
+            }
+
+            Err(err)
+        }
+    }
+}
+
+fn generate_pkce<DB: DatabaseAdapter>(ctx: &AuthContext<DB>) -> AuthResult<(String, String)> {
+    let mut verifier_bytes = [0u8; 32];
+    fill_oauth_random(ctx, &mut verifier_bytes)?;
+    let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(verifier_bytes);
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
-    (verifier, challenge)
+    Ok((verifier, challenge))
+}
+
+fn form_body(pairs: &[(&str, &str)]) -> Vec<u8> {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (key, value) in pairs {
+        serializer.append_pair(key, value);
+    }
+    serializer.finish().into_bytes()
+}
+
+fn form_post_request(url: &str, pairs: &[(&str, &str)]) -> OAuthHttpRequest {
+    let mut request = OAuthHttpRequest::new(HttpMethod::Post, url);
+    request
+        .headers
+        .insert("Accept".to_string(), "application/json".to_string());
+    request.headers.insert(
+        "Content-Type".to_string(),
+        "application/x-www-form-urlencoded".to_string(),
+    );
+    request.body = form_body(pairs);
+    request
+}
+
+fn bearer_get_request(url: &str, access_token: &str) -> OAuthHttpRequest {
+    let mut request = OAuthHttpRequest::new(HttpMethod::Get, url);
+    request
+        .headers
+        .insert("Accept".to_string(), "application/json".to_string());
+    request.headers.insert(
+        "Authorization".to_string(),
+        format!("Bearer {}", access_token),
+    );
+    request
+}
+
+async fn send_oauth_request<DB: DatabaseAdapter>(
+    ctx: &AuthContext<DB>,
+    request: OAuthHttpRequest,
+    operation: &str,
+) -> AuthResult<OAuthHttpResponse> {
+    match ctx.config.runtime.oauth_http.send(request.clone()).await {
+        Ok(response) => Ok(response),
+        Err(AuthError::Config(message)) => {
+            #[cfg(feature = "oauth-native-http")]
+            {
+                let _ = message;
+                let native = super::ReqwestOAuthHttpClient::new();
+                return native
+                    .send(request)
+                    .await
+                    .map_err(|e| AuthError::internal(format!("{} failed: {}", operation, e)));
+            }
+
+            #[cfg(not(feature = "oauth-native-http"))]
+            {
+                Err(AuthError::Config(message))
+            }
+        }
+        Err(err) => Err(AuthError::internal(format!(
+            "{} failed: {}",
+            operation, err
+        ))),
+    }
+}
+
+fn response_body_text(response: &OAuthHttpResponse) -> String {
+    String::from_utf8_lossy(&response.body).into_owned()
+}
+
+fn parse_success_json(
+    response: OAuthHttpResponse,
+    status_error: &str,
+    parse_error: &str,
+) -> AuthResult<serde_json::Value> {
+    if !(200..300).contains(&response.status) {
+        return Err(AuthError::internal(format!(
+            "{}: {}",
+            status_error,
+            response_body_text(&response)
+        )));
+    }
+
+    serde_json::from_slice(&response.body)
+        .map_err(|e| AuthError::internal(format!("{}: {}", parse_error, e)))
 }
 
 fn build_authorization_url(
@@ -252,35 +357,25 @@ pub(crate) async fn refresh_token_core<DB: DatabaseAdapter>(
     let current_refresh_token = maybe_decrypt(account.refresh_token(), encrypt, secret)?
         .ok_or_else(|| AuthError::bad_request("No refresh token available for this provider"))?;
 
-    let client = reqwest::Client::new();
-    let token_resp = client
-        .post(&provider.token_url)
-        .header("Accept", "application/json")
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", &current_refresh_token),
-            ("client_id", &provider.client_id),
-            ("client_secret", &provider.client_secret),
-        ])
-        .send()
-        .await
-        .map_err(|e| AuthError::internal(format!("Token refresh failed: {}", e)))?;
-
-    if !token_resp.status().is_success() {
-        let error_body = token_resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(AuthError::internal(format!(
-            "Token refresh returned error: {}",
-            error_body
-        )));
-    }
-
-    let token_data: serde_json::Value = token_resp
-        .json()
-        .await
-        .map_err(|e| AuthError::internal(format!("Failed to parse refresh response: {}", e)))?;
+    let token_resp = send_oauth_request(
+        ctx,
+        form_post_request(
+            &provider.token_url,
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", &current_refresh_token),
+                ("client_id", &provider.client_id),
+                ("client_secret", &provider.client_secret),
+            ],
+        ),
+        "Token refresh",
+    )
+    .await?;
+    let token_data = parse_success_json(
+        token_resp,
+        "Token refresh returned error",
+        "Failed to parse refresh response",
+    )?;
 
     let new_access_token = token_data["access_token"]
         .as_str()
@@ -290,7 +385,8 @@ pub(crate) async fn refresh_token_core<DB: DatabaseAdapter>(
     let expires_in = token_data["expires_in"].as_i64();
     let new_scope = token_data["scope"].as_str().map(String::from);
 
-    let access_token_expires_at = expires_in.map(|secs| Utc::now() + Duration::seconds(secs));
+    let access_token_expires_at =
+        expires_in.map(|secs| ctx.config.runtime.clock.now() + Duration::seconds(secs));
 
     let tokens = encrypt_token_set(
         ctx,
@@ -337,8 +433,12 @@ async fn initiate_oauth_flow_core<DB: DatabaseAdapter>(
         .get(provider_name)
         .ok_or_else(|| AuthError::bad_request(format!("Unknown provider: {}", provider_name)))?;
 
-    let (code_verifier, code_challenge) = generate_pkce();
-    let state = uuid::Uuid::new_v4().to_string();
+    let (code_verifier, code_challenge) = generate_pkce(ctx)?;
+    let state = ctx
+        .config
+        .runtime
+        .id_generator
+        .generate_id(IdKind::OAuthState)?;
 
     let effective_scopes: Vec<String> = scopes
         .map(|s| s.to_vec())
@@ -356,7 +456,7 @@ async fn initiate_oauth_flow_core<DB: DatabaseAdapter>(
         .create_verification(CreateVerification {
             identifier: format!("oauth:{}", state),
             value: payload.to_string(),
-            expires_at: Utc::now() + Duration::minutes(10),
+            expires_at: ctx.config.runtime.clock.now() + Duration::minutes(10),
         })
         .await?;
 
@@ -438,37 +538,27 @@ pub(crate) async fn callback_core<DB: DatabaseAdapter>(
         .ok_or_else(|| AuthError::bad_request(format!("Unknown provider: {}", provider_name)))?;
 
     // Exchange code for tokens
-    let client = reqwest::Client::new();
-    let token_resp = client
-        .post(&provider.token_url)
-        .header("Accept", "application/json")
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", callback_url),
-            ("client_id", &provider.client_id),
-            ("client_secret", &provider.client_secret),
-            ("code_verifier", code_verifier),
-        ])
-        .send()
-        .await
-        .map_err(|e| AuthError::internal(format!("Token exchange failed: {}", e)))?;
-
-    if !token_resp.status().is_success() {
-        let error_body = token_resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(AuthError::internal(format!(
-            "Token exchange returned error: {}",
-            error_body
-        )));
-    }
-
-    let token_data: serde_json::Value = token_resp
-        .json()
-        .await
-        .map_err(|e| AuthError::internal(format!("Failed to parse token response: {}", e)))?;
+    let token_resp = send_oauth_request(
+        ctx,
+        form_post_request(
+            &provider.token_url,
+            &[
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("redirect_uri", callback_url),
+                ("client_id", &provider.client_id),
+                ("client_secret", &provider.client_secret),
+                ("code_verifier", code_verifier),
+            ],
+        ),
+        "Token exchange",
+    )
+    .await?;
+    let token_data = parse_success_json(
+        token_resp,
+        "Token exchange returned error",
+        "Failed to parse token response",
+    )?;
 
     let access_token = token_data["access_token"]
         .as_str()
@@ -479,34 +569,23 @@ pub(crate) async fn callback_core<DB: DatabaseAdapter>(
     let expires_in = token_data["expires_in"].as_i64();
 
     // Fetch user info
-    let user_info_resp = client
-        .get(&provider.user_info_url)
-        .bearer_auth(access_token)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| AuthError::internal(format!("Failed to fetch user info: {}", e)))?;
-
-    if !user_info_resp.status().is_success() {
-        let error_body = user_info_resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(AuthError::internal(format!(
-            "User info request failed: {}",
-            error_body
-        )));
-    }
-
-    let user_info_json: serde_json::Value = user_info_resp
-        .json()
-        .await
-        .map_err(|e| AuthError::internal(format!("Failed to parse user info: {}", e)))?;
+    let user_info_resp = send_oauth_request(
+        ctx,
+        bearer_get_request(&provider.user_info_url, access_token),
+        "Failed to fetch user info",
+    )
+    .await?;
+    let user_info_json = parse_success_json(
+        user_info_resp,
+        "User info request failed",
+        "Failed to parse user info",
+    )?;
 
     let user_info = (provider.map_user_info)(user_info_json)
         .map_err(|e| AuthError::internal(format!("Failed to map user info: {}", e)))?;
 
-    let access_token_expires_at = expires_in.map(|secs| Utc::now() + Duration::seconds(secs));
+    let access_token_expires_at =
+        expires_in.map(|secs| ctx.config.runtime.clock.now() + Duration::seconds(secs));
 
     // If linking to an existing user
     if let Some(link_user_id) = link_user_id {
@@ -633,10 +712,23 @@ pub(crate) async fn callback_core<DB: DatabaseAdapter>(
         }
     } else {
         // Create a new user
-        let create_user = CreateUser::new()
-            .with_email(&user_info.email)
-            .with_name(user_info.name.as_deref().unwrap_or(&user_info.email))
-            .with_email_verified(user_info.email_verified);
+        let create_user = CreateUser {
+            id: Some(ctx.config.runtime.id_generator.generate_id(IdKind::User)?),
+            email: Some(user_info.email.clone()),
+            name: Some(
+                user_info
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| user_info.email.clone()),
+            ),
+            image: user_info.image.clone(),
+            email_verified: Some(user_info.email_verified),
+            password: None,
+            username: None,
+            display_username: None,
+            role: None,
+            metadata: None,
+        };
 
         ctx.database.create_user(create_user).await?
     };

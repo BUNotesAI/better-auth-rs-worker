@@ -1,16 +1,25 @@
 pub mod account_management;
+#[cfg(feature = "admin")]
 pub mod admin;
+#[cfg(feature = "api-key")]
 pub mod api_key;
+#[cfg(feature = "device-authorization")]
 pub mod device_authorization;
 pub mod email_password;
+#[cfg(feature = "email-verification")]
 pub mod email_verification;
 pub mod helpers;
 pub mod oauth;
+#[cfg(feature = "organization")]
 pub mod organization;
+#[cfg(feature = "passkey")]
 pub mod passkey;
+#[cfg(feature = "password-management")]
 pub mod password_management;
 pub mod session_management;
+#[cfg(feature = "two-factor")]
 pub mod two_factor;
+#[cfg(feature = "user-management")]
 pub mod user_management;
 
 use serde::{Deserialize, Serialize};
@@ -157,21 +166,30 @@ pub(crate) mod test_helpers {
 }
 
 pub use account_management::AccountManagementPlugin;
+#[cfg(feature = "admin")]
 pub use admin::{AdminConfig, AdminPlugin};
+#[cfg(feature = "api-key")]
 pub use api_key::{ApiKeyConfig, ApiKeyPlugin};
 pub use better_auth_core::PasswordHasher;
+#[cfg(feature = "device-authorization")]
 pub use device_authorization::{DeviceAuthorizationConfig, DeviceAuthorizationPlugin};
 pub use email_password::{EmailPasswordConfig, EmailPasswordPlugin};
+#[cfg(feature = "email-verification")]
 pub use email_verification::{
     EmailVerificationConfig, EmailVerificationHook, EmailVerificationPlugin, SendVerificationEmail,
 };
+#[cfg(feature = "organization")]
 pub use organization::{OrganizationConfig, OrganizationPlugin};
+#[cfg(feature = "passkey")]
 pub use passkey::{PasskeyConfig, PasskeyPlugin};
+#[cfg(feature = "password-management")]
 pub use password_management::{
     PasswordManagementConfig, PasswordManagementPlugin, SendResetPassword,
 };
 pub use session_management::SessionManagementPlugin;
+#[cfg(feature = "two-factor")]
 pub use two_factor::{TwoFactorConfig, TwoFactorPlugin};
+#[cfg(feature = "user-management")]
 pub use user_management::{
     ChangeEmailConfig, DeleteUserConfig, UserManagementConfig, UserManagementPlugin,
 };
