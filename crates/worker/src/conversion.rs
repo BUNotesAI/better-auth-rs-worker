@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use better_auth_core::{AuthRequest, AuthResponse, HttpMethod};
+use better_auth_core::adapters::DatabaseAdapter;
+use better_auth_core::{
+    AuthContext, AuthPlugin, AuthRequest, AuthResponse, AuthResult, HttpMethod,
+};
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +91,41 @@ pub fn worker_response_from_auth_response(response: AuthResponse) -> WorkerRespo
         headers,
         body: response.body,
     }
+}
+
+/// Executes one Worker request through one auth plugin.
+///
+/// Preconditions:
+/// - `parts` contains the Worker request data for the auth route being probed.
+/// - `plugin` is the production plugin that owns the route.
+/// - `ctx` contains the configured database and runtime capabilities.
+///
+/// Effects:
+/// 1. Converts Worker request data into [`AuthRequest`].
+/// 2. Executes `plugin.on_request`.
+/// 3. Converts a handled [`AuthResponse`] into [`WorkerResponseParts`].
+///
+/// Does not:
+/// - Dispatch across multiple plugins.
+/// - Catch or translate [`better_auth_core::AuthError`] values into HTTP responses.
+/// - Touch Worker bindings directly.
+///
+/// Idempotency:
+/// - Depends on the plugin route and database/runtime capabilities.
+pub async fn handle_worker_plugin_request<DB, P>(
+    plugin: &P,
+    parts: WorkerRequestParts,
+    ctx: &AuthContext<DB>,
+) -> AuthResult<Option<WorkerResponseParts>>
+where
+    DB: DatabaseAdapter,
+    P: AuthPlugin<DB>,
+{
+    let request = auth_request_from_worker_parts(parts);
+    plugin
+        .on_request(&request, ctx)
+        .await
+        .map(|response| response.map(worker_response_from_auth_response))
 }
 
 fn split_path_and_query(url_or_path: &str) -> (String, HashMap<String, String>) {

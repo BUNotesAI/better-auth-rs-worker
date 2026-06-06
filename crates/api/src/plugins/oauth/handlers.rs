@@ -500,13 +500,15 @@ pub(crate) async fn callback_core<DB: DatabaseAdapter>(
     ctx: &AuthContext<DB>,
 ) -> AuthResult<(OAuthCallbackResponse<DB::User>, String)> {
     // Look up state verification
+    let state_identifier = format!("oauth:{}", state_param);
     let verification = ctx
         .database
-        .get_verification_by_identifier(&format!("oauth:{}", state_param))
+        .get_verification_by_identifier(&state_identifier)
         .await?
         .ok_or_else(|| AuthError::bad_request("Invalid or expired OAuth state"))?;
 
-    let payload: serde_json::Value = serde_json::from_str(verification.value())
+    let state_value = verification.value().to_string();
+    let payload: serde_json::Value = serde_json::from_str(&state_value)
         .map_err(|e| AuthError::internal(format!("Invalid state payload: {}", e)))?;
 
     let stored_provider = payload["provider"]
@@ -529,8 +531,10 @@ pub(crate) async fn callback_core<DB: DatabaseAdapter>(
 
     let scopes = payload["scopes"].as_str().map(String::from);
 
-    // Delete the verification now that we've used it
-    ctx.database.delete_verification(verification.id()).await?;
+    ctx.database
+        .consume_verification(&state_identifier, &state_value)
+        .await?
+        .ok_or_else(|| AuthError::bad_request("Invalid or expired OAuth state"))?;
 
     let provider = config
         .providers

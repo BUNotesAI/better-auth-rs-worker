@@ -1678,6 +1678,516 @@ mod tests {
         assert!(adapter.get_user_by_id(&user.id).await.unwrap().is_none());
     }
 
+    #[cfg(feature = "api-route-tests")]
+    mod route_smoke {
+        use std::sync::{Arc, Mutex};
+
+        use async_trait::async_trait;
+        use better_auth_api::plugins::oauth::{OAuthConfig, OAuthProvider, OAuthUserInfo};
+        use better_auth_api::{EmailPasswordPlugin, OAuthPlugin, SessionManagementPlugin};
+        use better_auth_core::adapters::{AccountOps, SessionOps, UserOps, VerificationOps};
+        use better_auth_core::{
+            AuthConfig, AuthContext, AuthPlugin, AuthResult, AuthRuntimeCapabilities,
+            CreateVerification, HttpMethod, IdGenerator, OAuthHttpClient, OAuthHttpRequest,
+            OAuthHttpResponse, PasswordHasher, SessionTokenGenerator, SharedOAuthHttpClient,
+            SharedPasswordHasher,
+        };
+        use serde_json::json;
+
+        use crate::{WorkerRequestParts, WorkerResponseParts, handle_worker_plugin_request};
+
+        use super::*;
+
+        #[derive(Clone)]
+        struct RecordingD1 {
+            inner: Arc<SqliteD1>,
+            statements: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        impl RecordingD1 {
+            fn migrated() -> Self {
+                Self {
+                    inner: Arc::new(SqliteD1::migrated()),
+                    statements: Arc::new(Mutex::new(Vec::new())),
+                }
+            }
+
+            fn executed_sql(&self) -> Vec<&'static str> {
+                self.statements
+                    .lock()
+                    .expect("test D1 statement log is not poisoned")
+                    .clone()
+            }
+        }
+
+        #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), async_trait)]
+        impl D1Database for RecordingD1 {
+            async fn execute(&self, statement: D1PreparedStatement) -> AuthResult<D1QueryResult> {
+                self.statements
+                    .lock()
+                    .expect("test D1 statement log is not poisoned")
+                    .push(statement.sql());
+                self.inner.as_ref().execute(statement).await
+            }
+        }
+
+        type WorkerD1Context = AuthContext<D1DatabaseAdapter<RecordingD1>>;
+
+        struct WorkerD1Harness {
+            ctx: WorkerD1Context,
+            d1: RecordingD1,
+        }
+
+        #[derive(Debug, Default)]
+        struct IndexedIds {
+            user: Mutex<usize>,
+            session: Mutex<usize>,
+            account: Mutex<usize>,
+            verification: Mutex<usize>,
+            oauth_state: Mutex<usize>,
+            other: Mutex<usize>,
+        }
+
+        impl IndexedIds {
+            fn next(prefix: &str, counter: &Mutex<usize>) -> AuthResult<String> {
+                let mut value = counter.lock().expect("test ID lock is not poisoned");
+                let id = format!("{prefix}-{}", *value);
+                *value += 1;
+                Ok(id)
+            }
+        }
+
+        impl IdGenerator for IndexedIds {
+            fn generate_id(&self, kind: IdKind) -> AuthResult<String> {
+                match kind {
+                    IdKind::User => Self::next("p7-user", &self.user),
+                    IdKind::Session => Self::next("p7-session", &self.session),
+                    IdKind::Account => Self::next("p7-account", &self.account),
+                    IdKind::Verification => Self::next("p7-verification", &self.verification),
+                    IdKind::OAuthState => Self::next("p7-oauth-state", &self.oauth_state),
+                    _ => Self::next("p7-other", &self.other),
+                }
+            }
+        }
+
+        #[derive(Debug)]
+        struct SequencedSessionTokens {
+            prefix: &'static str,
+            counter: Mutex<usize>,
+        }
+
+        impl SequencedSessionTokens {
+            fn new(prefix: &'static str) -> Self {
+                Self {
+                    prefix,
+                    counter: Mutex::new(0),
+                }
+            }
+        }
+
+        impl SessionTokenGenerator for SequencedSessionTokens {
+            fn generate_session_token(&self) -> AuthResult<String> {
+                let mut value = self
+                    .counter
+                    .lock()
+                    .expect("test session-token lock is not poisoned");
+                let token = format!("{}-{}", self.prefix, *value);
+                *value += 1;
+                Ok(token)
+            }
+        }
+
+        #[derive(Debug)]
+        struct PrefixHasher;
+
+        #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), async_trait)]
+        impl PasswordHasher for PrefixHasher {
+            async fn hash(&self, password: &str) -> AuthResult<String> {
+                Ok(format!("worker-d1-hash:{password}"))
+            }
+
+            async fn verify(&self, hash: &str, password: &str) -> AuthResult<bool> {
+                Ok(hash == format!("worker-d1-hash:{password}"))
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct RecordingOAuthHttp {
+            requests: Mutex<Vec<OAuthHttpRequest>>,
+        }
+
+        #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), async_trait)]
+        impl OAuthHttpClient for RecordingOAuthHttp {
+            async fn send(&self, request: OAuthHttpRequest) -> AuthResult<OAuthHttpResponse> {
+                self.requests
+                    .lock()
+                    .expect("test OAuth HTTP lock is not poisoned")
+                    .push(request.clone());
+
+                if request.url == "https://provider.test/token" {
+                    assert_eq!(request.method, HttpMethod::Post);
+                    assert_eq!(
+                        request.headers.get("Accept").map(String::as_str),
+                        Some("application/json")
+                    );
+                    assert_eq!(
+                        request.headers.get("Content-Type").map(String::as_str),
+                        Some("application/x-www-form-urlencoded")
+                    );
+
+                    let body = String::from_utf8(request.body)
+                        .expect("token request body should be utf-8 form data");
+                    assert!(body.contains("grant_type=authorization_code"));
+                    assert!(body.contains("code=worker-callback-code"));
+                    assert!(body.contains(
+                        "redirect_uri=https%3A%2F%2Fauth.example.test%2Fcallback%2Fgoogle"
+                    ));
+                    assert!(body.contains("client_id=worker-client-id"));
+                    assert!(body.contains("client_secret=worker-client-secret"));
+                    assert!(body.contains("code_verifier="));
+
+                    return Ok(OAuthHttpResponse::new(
+                        200,
+                        r#"{"access_token":"worker-access-token","refresh_token":"worker-refresh-token","expires_in":3600,"scope":"openid email"}"#,
+                    ));
+                }
+
+                if request.url == "https://provider.test/userinfo" {
+                    assert_eq!(request.method, HttpMethod::Get);
+                    assert_eq!(
+                        request.headers.get("Accept").map(String::as_str),
+                        Some("application/json")
+                    );
+                    assert_eq!(
+                        request.headers.get("Authorization").map(String::as_str),
+                        Some("Bearer worker-access-token")
+                    );
+
+                    return Ok(OAuthHttpResponse::new(
+                        200,
+                        r#"{"sub":"worker-provider-user","email":"worker-oauth@example.com","name":"Worker OAuth User","email_verified":true}"#,
+                    ));
+                }
+
+                Err(AuthError::internal(format!(
+                    "unexpected OAuth HTTP request to {}",
+                    request.url
+                )))
+            }
+        }
+
+        fn worker_config(runtime: AuthRuntimeCapabilities) -> AuthConfig {
+            AuthConfig::new("test-secret-key-at-least-32-chars-long")
+                .base_url("https://auth.example.test")
+                .runtime_capabilities(runtime)
+        }
+
+        fn runtime_with_oauth_http(
+            oauth_http: SharedOAuthHttpClient,
+            session_token_prefix: &'static str,
+        ) -> AuthRuntimeCapabilities {
+            AuthRuntimeCapabilities::new(
+                shared(FixedClock),
+                shared(FixedRandom),
+                shared(IndexedIds::default()),
+                shared(SequencedSessionTokens::new(session_token_prefix)),
+                oauth_http,
+            )
+        }
+
+        fn context(
+            oauth_http: SharedOAuthHttpClient,
+            session_token_prefix: &'static str,
+        ) -> WorkerD1Harness {
+            let runtime = runtime_with_oauth_http(oauth_http, session_token_prefix);
+            let config = worker_config(runtime.clone());
+            let d1 = RecordingD1::migrated();
+            let adapter = D1DatabaseAdapter::from_auth_runtime(d1.clone(), runtime);
+            let ctx = AuthContext::new(Arc::new(config), Arc::new(adapter));
+            WorkerD1Harness { ctx, d1 }
+        }
+
+        fn prefix_hasher() -> SharedPasswordHasher {
+            shared(PrefixHasher)
+        }
+
+        async fn route<P>(
+            plugin: &P,
+            request: WorkerRequestParts,
+            ctx: &WorkerD1Context,
+        ) -> WorkerResponseParts
+        where
+            P: AuthPlugin<D1DatabaseAdapter<RecordingD1>>,
+        {
+            handle_worker_plugin_request(plugin, request, ctx)
+                .await
+                .expect("worker route succeeds")
+                .expect("plugin handles worker request")
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn worker_email_password_session_flow_uses_explicit_effects() {
+            let harness = context(shared(FixedOAuthHttp), "p7-email-session");
+            let ctx = &harness.ctx;
+            let email_plugin = EmailPasswordPlugin::new().password_hasher(prefix_hasher());
+            let session_plugin = SessionManagementPlugin::new();
+
+            let signup_response = route(
+                &email_plugin,
+                WorkerRequestParts::new(
+                    HttpMethod::Post,
+                    "https://auth.example.test/sign-up/email?callbackURL=%2Fdashboard",
+                )
+                .with_header("Content-Type", "application/json")
+                .with_body(
+                    json!({
+                        "name": "Worker D1 User",
+                        "email": "worker-d1@example.com",
+                        "password": "Password123!"
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ),
+                &ctx,
+            )
+            .await;
+            assert_eq!(signup_response.status(), 200);
+            assert!(
+                signup_response
+                    .header("set-cookie")
+                    .expect("sign-up sets a session cookie")
+                    .contains("better-auth.session-token=p7-email-session-0")
+            );
+            let signup_body: serde_json::Value =
+                serde_json::from_slice(signup_response.body()).unwrap();
+            assert_eq!(signup_body["token"], "p7-email-session-0");
+            assert_eq!(signup_body["user"]["id"], "p7-user-0");
+
+            let error_response = route(
+                &email_plugin,
+                WorkerRequestParts::new(HttpMethod::Post, "/sign-up/email")
+                    .with_header("Content-Type", "application/json")
+                    .with_body(json!({ "email": "missing-fields@example.com" }).to_string()),
+                &ctx,
+            )
+            .await;
+            assert_eq!(error_response.status(), 400);
+            assert_eq!(
+                error_response.header("content-type"),
+                Some("application/json")
+            );
+            let error_body: serde_json::Value =
+                serde_json::from_slice(error_response.body()).unwrap();
+            assert!(error_body["message"].is_string());
+
+            let signin_response = route(
+                &email_plugin,
+                WorkerRequestParts::new(HttpMethod::Post, "/sign-in/email")
+                    .with_header("Content-Type", "application/json")
+                    .with_body(
+                        json!({
+                            "email": "worker-d1@example.com",
+                            "password": "Password123!"
+                        })
+                        .to_string(),
+                    ),
+                &ctx,
+            )
+            .await;
+            assert_eq!(signin_response.status(), 200);
+            let signin_body: serde_json::Value =
+                serde_json::from_slice(signin_response.body()).unwrap();
+            assert_eq!(signin_body["token"], "p7-email-session-1");
+
+            let get_session_response = route(
+                &session_plugin,
+                WorkerRequestParts::new(HttpMethod::Get, "/get-session")
+                    .with_header("Authorization", "Bearer p7-email-session-1"),
+                &ctx,
+            )
+            .await;
+            assert_eq!(get_session_response.status(), 200);
+            let session_body: serde_json::Value =
+                serde_json::from_slice(get_session_response.body()).unwrap();
+            assert_eq!(session_body["session"]["token"], "p7-email-session-1");
+            assert_eq!(session_body["user"]["email"], "worker-d1@example.com");
+
+            let verification = ctx
+                .database
+                .create_verification(CreateVerification {
+                    identifier: "oauth:p7-consume-watch".to_string(),
+                    value: "watch-value".to_string(),
+                    expires_at: ctx.config.runtime.clock.now() + Duration::minutes(10),
+                })
+                .await
+                .unwrap();
+            let consumed = ctx
+                .database
+                .consume_verification("oauth:p7-consume-watch", "watch-value")
+                .await
+                .unwrap()
+                .expect("verification consume returns the deleted row");
+            assert_eq!(consumed.id, verification.id);
+            assert!(
+                ctx.database
+                    .get_verification("oauth:p7-consume-watch", "watch-value")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+
+            let signout_response = route(
+                &session_plugin,
+                WorkerRequestParts::new(HttpMethod::Post, "/sign-out")
+                    .with_header("Authorization", "Bearer p7-email-session-1")
+                    .with_body("{}"),
+                &ctx,
+            )
+            .await;
+            assert_eq!(signout_response.status(), 200);
+            assert!(
+                signout_response
+                    .header("set-cookie")
+                    .expect("sign-out clears the session cookie")
+                    .contains("better-auth.session-token=")
+            );
+            assert!(
+                ctx.database
+                    .get_session("p7-email-session-1")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn worker_oauth_uses_fetch_port_and_userinfo() {
+            let http = shared(RecordingOAuthHttp::default());
+            let harness = context(http.clone(), "p7-oauth-session");
+            let ctx = &harness.ctx;
+            let plugin = OAuthPlugin::with_config(oauth_config());
+
+            let sign_in_response = route(
+                &plugin,
+                WorkerRequestParts::new(HttpMethod::Post, "/sign-in/social")
+                    .with_header("Content-Type", "application/json")
+                    .with_body(
+                        json!({
+                            "provider": "google",
+                            "callback_url": "https://auth.example.test/callback/google"
+                        })
+                        .to_string(),
+                    ),
+                &ctx,
+            )
+            .await;
+            assert_eq!(sign_in_response.status(), 200);
+            let sign_in_body: serde_json::Value =
+                serde_json::from_slice(sign_in_response.body()).unwrap();
+            let authorization_url = sign_in_body["url"]
+                .as_str()
+                .expect("sign-in response includes authorization URL");
+            assert!(authorization_url.contains("https://provider.test/auth"));
+            assert!(authorization_url.contains("state=p7-oauth-state-0"));
+
+            let callback_response = route(
+                &plugin,
+                WorkerRequestParts::new(
+                    HttpMethod::Get,
+                    "/callback/google?code=worker-callback-code&state=p7-oauth-state-0",
+                ),
+                &ctx,
+            )
+            .await;
+            assert_eq!(callback_response.status(), 200);
+            assert!(
+                callback_response
+                    .header("set-cookie")
+                    .expect("OAuth callback sets a session cookie")
+                    .contains("better-auth.session-token=p7-oauth-session-0")
+            );
+            let callback_body: serde_json::Value =
+                serde_json::from_slice(callback_response.body()).unwrap();
+            assert_eq!(callback_body["token"], "p7-oauth-session-0");
+
+            let user = ctx
+                .database
+                .get_user_by_email("worker-oauth@example.com")
+                .await
+                .unwrap()
+                .expect("OAuth callback creates a user");
+            assert_eq!(user.id, "p7-user-0");
+
+            let account = ctx
+                .database
+                .get_account("google", "worker-provider-user")
+                .await
+                .unwrap()
+                .expect("OAuth callback links provider account");
+            assert_eq!(account.user_id, user.id);
+
+            let session = ctx
+                .database
+                .get_session("p7-oauth-session-0")
+                .await
+                .unwrap()
+                .expect("OAuth callback creates a session");
+            assert_eq!(session.user_id, user.id);
+
+            assert!(
+                ctx.database
+                    .get_verification_by_identifier("oauth:p7-oauth-state-0")
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "OAuth callback removes consumed D1 state"
+            );
+            assert!(
+                harness.d1.executed_sql().iter().any(|sql| {
+                    sql.contains("DELETE FROM verifications") && sql.contains("RETURNING")
+                }),
+                "OAuth callback consumes D1 state through consume_verification"
+            );
+            assert_eq!(
+                http.requests
+                    .lock()
+                    .expect("test OAuth HTTP lock is not poisoned")
+                    .len(),
+                2
+            );
+        }
+
+        fn oauth_config() -> OAuthConfig {
+            let mut config = OAuthConfig::default();
+            config.providers.insert(
+                "google".to_string(),
+                OAuthProvider {
+                    client_id: "worker-client-id".to_string(),
+                    client_secret: "worker-client-secret".to_string(),
+                    auth_url: "https://provider.test/auth".to_string(),
+                    token_url: "https://provider.test/token".to_string(),
+                    user_info_url: "https://provider.test/userinfo".to_string(),
+                    scopes: vec!["openid".to_string(), "email".to_string()],
+                    map_user_info: map_google_user_info,
+                },
+            );
+            config
+        }
+
+        fn map_google_user_info(value: serde_json::Value) -> Result<OAuthUserInfo, String> {
+            Ok(OAuthUserInfo {
+                id: value["sub"].as_str().ok_or("missing sub")?.to_string(),
+                email: value["email"].as_str().ok_or("missing email")?.to_string(),
+                name: value["name"].as_str().map(String::from),
+                image: value["picture"].as_str().map(String::from),
+                email_verified: value["email_verified"].as_bool().unwrap_or(false),
+            })
+        }
+    }
+
     fn migration_files() -> Vec<std::path::PathBuf> {
         let mut migrations = fs::read_dir(Path::new(D1_MIGRATIONS_DIR))
             .unwrap()

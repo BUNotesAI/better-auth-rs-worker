@@ -24,7 +24,7 @@
 //! ```
 
 // Core module — BetterAuth struct lives here in the root crate
-// because it orchestrates plugins (from better-auth-api) + core (from better-auth-core)
+// because it orchestrates plugins from the API crate plus the portable core.
 pub mod core;
 pub mod handlers;
 
