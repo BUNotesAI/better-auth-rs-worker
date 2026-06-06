@@ -1,0 +1,9 @@
+name = "better-auth-rs-worker-d1-gate"
+compatibility_date = "2026-06-07"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "better-auth-rs-worker-local"
+database_id = "00000000-0000-0000-0000-000000000000"
+preview_database_id = "better-auth-rs-worker-local"
+migrations_dir = "migrations/d1"

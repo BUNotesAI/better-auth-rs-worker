@@ -7,15 +7,16 @@ description = "Cloudflare Worker adapter boundary for better-auth"
 repository = { workspace = true }
 
 [dependencies]
+async-trait = { workspace = true }
 better-auth-api = { workspace = true, default-features = false, optional = true }
 better-auth-core = { workspace = true, default-features = false }
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
-chrono = { workspace = true }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 tokio = { workspace = true }
 
 [features]

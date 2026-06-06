@@ -7,6 +7,7 @@
 mod capabilities;
 mod config;
 mod conversion;
+mod d1;
 
 pub use capabilities::{WorkerRuntimeCapabilities, WorkerRuntimeCapabilitiesBuilder};
 pub use config::{
@@ -16,4 +17,8 @@ pub use config::{
 pub use conversion::{
     WorkerRequestParts, WorkerResponseParts, auth_request_from_worker_parts,
     worker_response_from_auth_response,
+};
+pub use d1::{
+    D1_MIGRATIONS_DIR, D1Database, D1DatabaseAdapter, D1PreparedStatement, D1QueryResult, D1Row,
+    D1StatementMethod, D1Value, lint_d1_migration_sql,
 };
