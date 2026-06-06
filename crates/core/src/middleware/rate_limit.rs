@@ -115,7 +115,8 @@ impl RateLimitMiddleware {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl Middleware for RateLimitMiddleware {
     fn name(&self) -> &'static str {
         "rate-limit"

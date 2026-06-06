@@ -1,7 +1,7 @@
-use chrono::Utc;
 use std::sync::Arc;
 
 use crate::adapters::DatabaseAdapter;
+use crate::capabilities::IdKind;
 use crate::config::AuthConfig;
 use crate::entity::{AuthSession, AuthUser};
 use crate::error::AuthResult;
@@ -34,10 +34,24 @@ impl<DB: DatabaseAdapter> SessionManager<DB> {
         ip_address: Option<String>,
         user_agent: Option<String>,
     ) -> AuthResult<DB::Session> {
-        let expires_at = Utc::now() + self.config.session.expires_in;
+        let now = self.config.runtime.clock.now();
+        let expires_at = now + self.config.session.expires_in;
 
         let create_session = CreateSession {
+            id: Some(
+                self.config
+                    .runtime
+                    .id_generator
+                    .generate_id(IdKind::Session)?,
+            ),
+            token: Some(
+                self.config
+                    .runtime
+                    .session_tokens
+                    .generate_session_token()?,
+            ),
             user_id: user.id().to_string(),
+            created_at: Some(now),
             expires_at,
             ip_address,
             user_agent,
@@ -54,7 +68,7 @@ impl<DB: DatabaseAdapter> SessionManager<DB> {
         let mut session = self.database.get_session(token).await?;
 
         let should_refresh = if let Some(ref s) = session {
-            let now = Utc::now();
+            let now = self.config.runtime.clock.now();
 
             if s.expires_at() < now || !s.active() {
                 // Session expired or inactive — best-effort cleanup. A DB
@@ -76,7 +90,7 @@ impl<DB: DatabaseAdapter> SessionManager<DB> {
                         // Only refresh if the session was last updated more than
                         // `update_age` ago.
                         let updated = s.updated_at();
-                        Utc::now() - updated >= age
+                        now - updated >= age
                     }
                     // No update_age set → refresh on every access.
                     None => true,
@@ -89,7 +103,7 @@ impl<DB: DatabaseAdapter> SessionManager<DB> {
         };
 
         if should_refresh {
-            let new_expires_at = Utc::now() + self.config.session.expires_in;
+            let new_expires_at = self.config.runtime.clock.now() + self.config.session.expires_in;
             match self
                 .database
                 .update_session_expiry(token, new_expires_at)
@@ -147,7 +161,7 @@ impl<DB: DatabaseAdapter> SessionManager<DB> {
     /// Get all active sessions for a user
     pub async fn list_user_sessions(&self, user_id: &str) -> AuthResult<Vec<DB::Session>> {
         let sessions = self.database.get_user_sessions(user_id).await?;
-        let now = Utc::now();
+        let now = self.config.runtime.clock.now();
 
         // Filter out expired sessions
         let active_sessions: Vec<DB::Session> = sessions
@@ -214,7 +228,7 @@ impl<DB: DatabaseAdapter> SessionManager<DB> {
     /// If `fresh_age` is `None`, the session is never considered fresh.
     pub fn is_session_fresh(&self, session: &impl AuthSession) -> bool {
         match self.config.session.fresh_age {
-            Some(fresh_age) => session.created_at() + fresh_age > Utc::now(),
+            Some(fresh_age) => session.created_at() + fresh_age > self.config.runtime.clock.now(),
             None => false,
         }
     }
@@ -335,7 +349,7 @@ mod tests {
         let mgr = SessionManager::new(config, db.clone());
 
         let created = mgr.create_session(&user, None, None).await.unwrap();
-        db.update_session_expiry(created.token(), Utc::now() - Duration::seconds(1))
+        db.update_session_expiry(created.token(), chrono::Utc::now() - Duration::seconds(1))
             .await
             .unwrap();
 

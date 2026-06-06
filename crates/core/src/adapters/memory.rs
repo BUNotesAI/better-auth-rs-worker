@@ -305,9 +305,15 @@ where
     async fn create_session(&self, create_session: CreateSession) -> AuthResult<S> {
         let mut sessions = self.sessions.lock().unwrap();
 
-        let id = new_required_id("session")?;
-        let token = new_session_token()?;
-        let now = Utc::now();
+        let id = create_session
+            .id
+            .clone()
+            .map_or_else(|| new_required_id("session"), Ok)?;
+        let token = create_session
+            .token
+            .clone()
+            .map_or_else(new_session_token, Ok)?;
+        let now = create_session.created_at.unwrap_or_else(Utc::now);
         let session = S::from_create(id, token.clone(), &create_session, now);
 
         sessions.insert(token, session.clone());

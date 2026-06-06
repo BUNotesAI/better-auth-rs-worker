@@ -150,7 +150,8 @@ impl CorsMiddleware {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl Middleware for CorsMiddleware {
     fn name(&self) -> &'static str {
         "cors"

@@ -8,12 +8,13 @@ use better_auth_core::entity::{AuthSession, AuthUser};
 use better_auth_core::{AuthContext, AuthPlugin, AuthRoute};
 use better_auth_core::{AuthError, AuthResult};
 use better_auth_core::{
-    AuthRequest, AuthResponse, CreateUser, CreateVerification, HttpMethod, PASSWORD_HASH_KEY,
+    AuthRequest, AuthResponse, CreateUser, CreateVerification, HttpMethod, IdKind,
+    PASSWORD_HASH_KEY,
 };
 
 use super::email_verification::EmailVerificationPlugin;
 use better_auth_core::utils::cookie_utils::create_session_cookie;
-use better_auth_core::utils::password::{self as password_utils, PasswordHasher};
+use better_auth_core::utils::password::{self as password_utils, SharedPasswordHasher};
 /// Email and password authentication plugin
 pub struct EmailPasswordPlugin {
     config: EmailPasswordConfig,
@@ -33,7 +34,7 @@ pub struct EmailPasswordConfig {
     /// When false, sign-up returns the user but doesn't create a session.
     pub auto_sign_in: bool,
     /// Custom password hasher. When `None`, the default Argon2 hasher is used.
-    pub password_hasher: Option<Arc<dyn PasswordHasher>>,
+    pub password_hasher: Option<SharedPasswordHasher>,
 }
 
 impl std::fmt::Debug for EmailPasswordConfig {
@@ -171,7 +172,7 @@ impl EmailPasswordPlugin {
         self
     }
 
-    pub fn password_hasher(mut self, hasher: Arc<dyn PasswordHasher>) -> Self {
+    pub fn password_hasher(mut self, hasher: SharedPasswordHasher) -> Self {
         self.config.password_hasher = Some(hasher);
         self
     }
@@ -308,9 +309,18 @@ pub(crate) async fn sign_up_core<DB: DatabaseAdapter>(
         serde_json::Value::Object(m)
     };
 
-    let mut create_user = CreateUser::new()
-        .with_email(&body.email)
-        .with_name(&body.name);
+    let mut create_user = CreateUser {
+        id: Some(ctx.config.runtime.id_generator.generate_id(IdKind::User)?),
+        email: Some(body.email.clone()),
+        name: Some(body.name.clone()),
+        image: None,
+        email_verified: None,
+        password: None,
+        username: None,
+        display_username: None,
+        role: None,
+        metadata: None,
+    };
     if let Some(ref username) = body.username {
         create_user = create_user.with_username(username.clone());
     }
@@ -368,12 +378,18 @@ async fn sign_in_with_user_core<DB: DatabaseAdapter>(
 
     // Check if 2FA is enabled
     if user.two_factor_enabled() {
-        let pending_token = format!("2fa_{}", uuid::Uuid::new_v4());
+        let pending_token = format!(
+            "2fa_{}",
+            ctx.config
+                .runtime
+                .id_generator
+                .generate_id(IdKind::TwoFactor)?
+        );
         ctx.database
             .create_verification(CreateVerification {
                 identifier: format!("2fa_pending:{}", pending_token),
                 value: user.id().to_string(),
-                expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+                expires_at: ctx.config.runtime.clock.now() + chrono::Duration::minutes(5),
             })
             .await?;
         return Ok(SignInCoreResult::TwoFactorRedirect(
@@ -645,13 +661,24 @@ mod axum_impl {
 mod tests {
     use super::*;
     use better_auth_core::AuthContext;
-    use better_auth_core::adapters::{MemoryDatabaseAdapter, UserOps};
+    use better_auth_core::adapters::{MemoryDatabaseAdapter, SessionOps, UserOps};
+    use better_auth_core::capabilities::AuthRuntimeCapabilities;
     use better_auth_core::config::AuthConfig;
+    use better_auth_core::utils::password::PasswordHasher;
+    use better_auth_core::{
+        AuthSession, Clock, IdGenerator, IdKind, OAuthHttpClient, OAuthHttpRequest,
+        OAuthHttpResponse, SecureRandom, SessionTokenGenerator,
+    };
+    use chrono::{DateTime, Utc};
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn create_test_context() -> AuthContext<MemoryDatabaseAdapter> {
         let config = AuthConfig::new("test-secret-key-at-least-32-chars-long");
+        create_test_context_with_config(config)
+    }
+
+    fn create_test_context_with_config(config: AuthConfig) -> AuthContext<MemoryDatabaseAdapter> {
         let config = Arc::new(config);
         let database = Arc::new(MemoryDatabaseAdapter::new());
         AuthContext::new(config, database)
@@ -670,6 +697,149 @@ mod tests {
             Some(body.to_string().into_bytes()),
             HashMap::new(),
         )
+    }
+
+    fn timestamp(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("test timestamp parses")
+            .with_timezone(&Utc)
+    }
+
+    #[derive(Clone)]
+    struct FixedClock(DateTime<Utc>);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+
+    struct SequencedIds {
+        values: Mutex<Vec<String>>,
+    }
+
+    impl SequencedIds {
+        fn new(values: Vec<&str>) -> Self {
+            Self {
+                values: Mutex::new(values.into_iter().map(str::to_string).rev().collect()),
+            }
+        }
+    }
+
+    impl IdGenerator for SequencedIds {
+        fn generate_id(&self, _kind: IdKind) -> AuthResult<String> {
+            self.values
+                .lock()
+                .expect("test ID lock is not poisoned")
+                .pop()
+                .ok_or_else(|| AuthError::internal("test ID generator exhausted"))
+        }
+    }
+
+    struct FixedSessionTokens;
+
+    impl SessionTokenGenerator for FixedSessionTokens {
+        fn generate_session_token(&self) -> AuthResult<String> {
+            Ok("session_email_password".to_string())
+        }
+    }
+
+    struct UnusedRandom;
+
+    impl SecureRandom for UnusedRandom {
+        fn fill_bytes(&self, dest: &mut [u8]) -> AuthResult<()> {
+            dest.fill(9);
+            Ok(())
+        }
+    }
+
+    struct UnusedOAuthHttp;
+
+    #[async_trait]
+    impl OAuthHttpClient for UnusedOAuthHttp {
+        async fn send(&self, _request: OAuthHttpRequest) -> AuthResult<OAuthHttpResponse> {
+            Ok(OAuthHttpResponse::new(200, Vec::new()))
+        }
+    }
+
+    fn runtime(now: DateTime<Utc>) -> AuthRuntimeCapabilities {
+        AuthRuntimeCapabilities::new(
+            Arc::new(FixedClock(now)),
+            Arc::new(UnusedRandom),
+            Arc::new(SequencedIds::new(vec![
+                "user-from-runtime",
+                "session-from-runtime",
+            ])),
+            Arc::new(FixedSessionTokens),
+            Arc::new(UnusedOAuthHttp),
+        )
+    }
+
+    struct PrefixHasher;
+
+    #[async_trait]
+    impl PasswordHasher for PrefixHasher {
+        async fn hash(&self, password: &str) -> AuthResult<String> {
+            Ok(format!("worker-hash:{password}"))
+        }
+
+        async fn verify(&self, hash: &str, password: &str) -> AuthResult<bool> {
+            Ok(hash == format!("worker-hash:{password}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn email_password_signup_uses_runtime_effect_ports() {
+        let now = timestamp("2035-02-03T04:05:06Z");
+        let config = AuthConfig {
+            runtime: runtime(now),
+            ..AuthConfig::new("test-secret-key-at-least-32-chars-long")
+        };
+        let ctx = create_test_context_with_config(config);
+        let plugin = EmailPasswordPlugin::new().password_hasher(Arc::new(PrefixHasher));
+
+        let req = create_signup_request("runtime@example.com", "Password123!");
+        let response = plugin
+            .on_request(&req, &ctx)
+            .await
+            .expect("plugin request succeeds")
+            .expect("email-password route handles sign-up");
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("response body is JSON");
+        assert_eq!(body["token"], "session_email_password");
+        assert!(
+            response
+                .headers
+                .get("Set-Cookie")
+                .expect("signup sets session cookie")
+                .contains("session_email_password")
+        );
+
+        let user = ctx
+            .database
+            .get_user_by_email("runtime@example.com")
+            .await
+            .expect("user lookup succeeds")
+            .expect("user was created");
+        assert_eq!(user.id(), "user-from-runtime");
+        assert_eq!(
+            user.metadata()
+                .get(PASSWORD_HASH_KEY)
+                .and_then(serde_json::Value::as_str),
+            Some("worker-hash:Password123!")
+        );
+
+        let sessions = ctx
+            .database
+            .get_user_sessions(user.id())
+            .await
+            .expect("session lookup succeeds");
+        let session = sessions.first().expect("signup created a session");
+        assert_eq!(session.id(), "session-from-runtime");
+        assert_eq!(session.token(), "session_email_password");
+        assert_eq!(session.created_at(), now);
     }
 
     #[tokio::test]

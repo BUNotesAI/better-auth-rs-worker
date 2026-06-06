@@ -4,6 +4,7 @@ pub mod csrf;
 pub mod rate_limit;
 
 use crate::error::AuthResult;
+use crate::threading::RuntimeSendSync;
 use crate::types::{AuthRequest, AuthResponse};
 use async_trait::async_trait;
 
@@ -11,8 +12,9 @@ use async_trait::async_trait;
 ///
 /// Middleware runs before plugin dispatch (`before_request`) and after
 /// a response has been produced (`after_request`).
-#[async_trait]
-pub trait Middleware: Send + Sync {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait Middleware: RuntimeSendSync {
     /// Human-readable name for logging / debugging.
     fn name(&self) -> &'static str;
 

@@ -1,3 +1,4 @@
+use crate::capabilities::AuthRuntimeCapabilities;
 use crate::email::EmailProvider;
 use crate::error::AuthError;
 use chrono::Duration;
@@ -69,6 +70,10 @@ pub struct AuthConfig {
 
     /// Email provider for sending emails (verification, password reset, etc.)
     pub email_provider: Option<Arc<dyn EmailProvider>>,
+
+    /// Runtime effect capabilities for portable time, ID, token, random, and
+    /// OAuth HTTP decisions.
+    pub runtime: AuthRuntimeCapabilities,
 
     /// Advanced configuration options
     pub advanced: AdvancedConfig,
@@ -366,6 +371,7 @@ impl Default for AuthConfig {
             password: PasswordConfig::default(),
             account: AccountConfig::default(),
             email_provider: None,
+            runtime: AuthRuntimeCapabilities::default(),
             advanced: AdvancedConfig::default(),
         }
     }
@@ -461,6 +467,11 @@ impl AuthConfig {
 
     pub fn account(mut self, account: AccountConfig) -> Self {
         self.account = account;
+        self
+    }
+
+    pub fn runtime_capabilities(mut self, runtime: AuthRuntimeCapabilities) -> Self {
+        self.runtime = runtime;
         self
     }
 

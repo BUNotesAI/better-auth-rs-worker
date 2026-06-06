@@ -4,6 +4,7 @@
 //! Lives in `better-auth-core` so that any crate in the workspace (plugins,
 //! integrations, etc.) can reuse these primitives without duplicating logic.
 
+#[cfg(not(feature = "local-futures"))]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,7 +18,15 @@ use argon2::{Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier};
 use crate::adapters::DatabaseAdapter;
 use crate::error::{AuthError, AuthResult};
 use crate::plugin::AuthContext;
+use crate::threading::RuntimeSendSync;
 use crate::types::UpdateUser;
+
+#[cfg(feature = "local-futures")]
+pub type SharedPasswordHasher = std::rc::Rc<DynPasswordHasher>;
+#[cfg(not(feature = "local-futures"))]
+pub type SharedPasswordHasher = Arc<DynPasswordHasher>;
+
+pub type DynPasswordHasher = dyn PasswordHasher;
 
 // ---------------------------------------------------------------------------
 // PasswordHasher trait
@@ -27,8 +36,9 @@ use crate::types::UpdateUser;
 ///
 /// When provided in plugin configs, this overrides the default Argon2-based
 /// password hashing.
-#[async_trait]
-pub trait PasswordHasher: Send + Sync {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait PasswordHasher: RuntimeSendSync + 'static {
     /// Hash a plaintext password and return the hash string.
     async fn hash(&self, password: &str) -> AuthResult<String>;
     /// Verify a password against a hash string. Returns `true` if the password matches.
@@ -42,7 +52,7 @@ pub trait PasswordHasher: Send + Sync {
 /// Hash `password` using the custom `hasher` (if provided) or the default
 /// Argon2 algorithm.
 pub async fn hash_password(
-    hasher: Option<&Arc<dyn PasswordHasher>>,
+    hasher: Option<&SharedPasswordHasher>,
     password: &str,
 ) -> AuthResult<String> {
     if let Some(hasher) = hasher {
@@ -76,7 +86,7 @@ fn hash_password_default(_password: &str) -> AuthResult<String> {
 /// the default Argon2 algorithm.  Returns `Ok(())` on match, or
 /// `Err(AuthError::InvalidCredentials)` on mismatch.
 pub async fn verify_password(
-    hasher: Option<&Arc<dyn PasswordHasher>>,
+    hasher: Option<&SharedPasswordHasher>,
     password: &str,
     hash: &str,
 ) -> AuthResult<()> {

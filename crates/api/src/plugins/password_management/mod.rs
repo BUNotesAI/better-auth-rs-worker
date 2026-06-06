@@ -8,7 +8,7 @@ use better_auth_core::{AuthError, AuthResult};
 use better_auth_core::{AuthRequest, AuthResponse, HttpMethod};
 use better_auth_core::{AuthSession, DatabaseAdapter};
 
-use better_auth_core::utils::password::PasswordHasher;
+use better_auth_core::utils::password::SharedPasswordHasher;
 
 use super::StatusResponse;
 
@@ -66,7 +66,7 @@ pub struct PasswordManagementConfig {
     pub on_password_reset: Option<Arc<OnPasswordResetCallback>>,
     /// Custom password hasher. When `None`, the default Argon2 hasher is used.
     #[config(default = None)]
-    pub password_hasher: Option<Arc<dyn PasswordHasher>>,
+    pub password_hasher: Option<SharedPasswordHasher>,
 }
 
 impl std::fmt::Debug for PasswordManagementConfig {

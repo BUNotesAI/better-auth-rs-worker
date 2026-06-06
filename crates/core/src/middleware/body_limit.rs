@@ -51,7 +51,8 @@ impl BodyLimitMiddleware {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl Middleware for BodyLimitMiddleware {
     fn name(&self) -> &'static str {
         "body-limit"

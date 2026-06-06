@@ -42,11 +42,13 @@ pub use adapters::{
 #[cfg(feature = "sqlx-postgres")]
 pub use adapters::{SqlxAdapter, SqlxEntity};
 pub use capabilities::{
-    Clock, DynClock, DynIdGenerator, DynOAuthHttpClient, DynSecureRandom, DynSessionTokenGenerator,
-    IdGenerator, IdKind, LocalRuntimeCapabilitiesDyn, NativeDynClock, NativeDynIdGenerator,
-    NativeDynOAuthHttpClient, NativeDynSecureRandom, NativeDynSessionTokenGenerator,
-    NativeRuntimeCapabilitiesDyn, OAuthHttpClient, OAuthHttpRequest, OAuthHttpResponse,
-    RuntimeCapabilities, SecureRandom, SessionTokenGenerator,
+    AuthRuntimeCapabilities, Clock, DynClock, DynIdGenerator, DynOAuthHttpClient, DynSecureRandom,
+    DynSessionTokenGenerator, IdGenerator, IdKind, LocalRuntimeCapabilitiesDyn, NativeDynClock,
+    NativeDynIdGenerator, NativeDynOAuthHttpClient, NativeDynSecureRandom,
+    NativeDynSessionTokenGenerator, NativeRuntimeCapabilitiesDyn, OAuthHttpClient,
+    OAuthHttpRequest, OAuthHttpResponse, RuntimeCapabilities, SecureRandom, SessionTokenGenerator,
+    SharedClock, SharedIdGenerator, SharedOAuthHttpClient, SharedSecureRandom,
+    SharedSessionTokenGenerator,
 };
 pub use config::{
     AccountConfig, AccountLinkingConfig, AdvancedConfig, AdvancedDatabaseConfig, Argon2Config,
@@ -90,4 +92,4 @@ pub use types::{
     SuccessResponse, TwoFactor, UpdateAccount, UpdateApiKey, UpdateOrganization, UpdatePasskey,
     UpdateUser, UpdateUserRequest, UpdateUserResponse, User, ValidationErrorResponse, Verification,
 };
-pub use utils::password::{PasswordHasher, hash_password, verify_password};
+pub use utils::password::{PasswordHasher, SharedPasswordHasher, hash_password, verify_password};

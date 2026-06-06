@@ -62,7 +62,8 @@ impl CsrfMiddleware {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl Middleware for CsrfMiddleware {
     fn name(&self) -> &'static str {
         "csrf"

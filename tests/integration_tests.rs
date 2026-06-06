@@ -89,7 +89,10 @@ async fn test_revoke_session_integration() {
     use chrono::{Duration, Utc};
 
     let create_session = CreateSession {
+        id: None,
+        token: None,
         user_id: user_id.clone(),
+        created_at: None,
         expires_at: Utc::now() + Duration::hours(24),
         ip_address: Some("192.168.1.1".to_string()),
         user_agent: Some("test-agent-2".to_string()),
@@ -421,7 +424,10 @@ async fn test_set_password_success() {
     let user = auth.database().create_user(create_user).await.unwrap();
 
     let create_session = CreateSession {
+        id: None,
+        token: None,
         user_id: user.id.clone(),
+        created_at: None,
         expires_at: Utc::now() + Duration::hours(24),
         ip_address: None,
         user_agent: None,
@@ -533,7 +539,10 @@ async fn test_revoke_other_sessions_integration() {
     use std::collections::HashMap;
 
     let create_session = CreateSession {
+        id: None,
+        token: None,
         user_id: user_id.clone(),
+        created_at: None,
         expires_at: Utc::now() + Duration::hours(24),
         ip_address: Some("192.168.1.1".to_string()),
         user_agent: Some("other-agent".to_string()),
@@ -991,7 +1000,10 @@ async fn test_unlink_last_account_fails() {
     let user = auth.database().create_user(create_user).await.unwrap();
 
     let create_session = CreateSession {
+        id: None,
+        token: None,
         user_id: user.id.clone(),
+        created_at: None,
         expires_at: Utc::now() + Duration::hours(24),
         ip_address: None,
         user_agent: None,

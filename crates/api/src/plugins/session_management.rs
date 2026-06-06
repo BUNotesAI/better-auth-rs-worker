@@ -438,7 +438,10 @@ mod tests {
         .await;
 
         let create_session2 = CreateSession {
+            id: None,
+            token: None,
             user_id: user.id.clone(),
+            created_at: None,
             expires_at: Utc::now() + Duration::hours(24),
             ip_address: Some("192.168.1.1".to_string()),
             user_agent: Some("another-agent".to_string()),
@@ -474,7 +477,10 @@ mod tests {
         .await;
 
         let create_session2 = CreateSession {
+            id: None,
+            token: None,
             user_id: user.id.clone(),
+            created_at: None,
             expires_at: Utc::now() + Duration::hours(24),
             ip_address: Some("192.168.1.1".to_string()),
             user_agent: Some("another-agent".to_string()),
@@ -518,7 +524,10 @@ mod tests {
         let user2 = ctx.database.create_user(create_user2).await.unwrap();
 
         let create_session2 = CreateSession {
+            id: None,
+            token: None,
             user_id: user2.id,
+            created_at: None,
             expires_at: Utc::now() + Duration::hours(24),
             ip_address: Some("192.168.1.1".to_string()),
             user_agent: Some("another-agent".to_string()),
@@ -551,7 +560,10 @@ mod tests {
         .await;
 
         let create_session2 = CreateSession {
+            id: None,
+            token: None,
             user_id: user.id.clone(),
+            created_at: None,
             expires_at: Utc::now() + Duration::hours(24),
             ip_address: Some("192.168.1.1".to_string()),
             user_agent: Some("another-agent".to_string()),

@@ -105,7 +105,10 @@ async fn seed_session(ctx: &better_auth_core::AuthContext<MemoryDatabaseAdapter>
         .unwrap();
     ctx.database
         .create_session(CreateSession {
+            id: None,
+            token: None,
             user_id: user.id.clone(),
+            created_at: None,
             expires_at: Utc::now() + Duration::hours(1),
             ip_address: None,
             user_agent: None,

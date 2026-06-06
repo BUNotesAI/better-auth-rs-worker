@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::error::AuthResult;
+use crate::error::{AuthError, AuthResult};
 use crate::threading::RuntimeSendSync;
 use crate::types::HttpMethod;
 
@@ -23,8 +23,33 @@ pub enum IdKind {
     OAuthState,
 }
 
+#[cfg(not(feature = "local-futures"))]
+pub type SharedClock = std::sync::Arc<DynClock>;
+#[cfg(feature = "local-futures")]
+pub type SharedClock = std::rc::Rc<DynClock>;
+
+#[cfg(not(feature = "local-futures"))]
+pub type SharedSecureRandom = std::sync::Arc<DynSecureRandom>;
+#[cfg(feature = "local-futures")]
+pub type SharedSecureRandom = std::rc::Rc<DynSecureRandom>;
+
+#[cfg(not(feature = "local-futures"))]
+pub type SharedIdGenerator = std::sync::Arc<DynIdGenerator>;
+#[cfg(feature = "local-futures")]
+pub type SharedIdGenerator = std::rc::Rc<DynIdGenerator>;
+
+#[cfg(not(feature = "local-futures"))]
+pub type SharedSessionTokenGenerator = std::sync::Arc<DynSessionTokenGenerator>;
+#[cfg(feature = "local-futures")]
+pub type SharedSessionTokenGenerator = std::rc::Rc<DynSessionTokenGenerator>;
+
+#[cfg(not(feature = "local-futures"))]
+pub type SharedOAuthHttpClient = std::sync::Arc<DynOAuthHttpClient>;
+#[cfg(feature = "local-futures")]
+pub type SharedOAuthHttpClient = std::rc::Rc<DynOAuthHttpClient>;
+
 /// Supplies the current time for portable auth decisions.
-pub trait Clock: 'static {
+pub trait Clock: RuntimeSendSync + 'static {
     /// Returns the current UTC time.
     ///
     /// Preconditions:
@@ -43,7 +68,7 @@ pub trait Clock: 'static {
 }
 
 /// Supplies cryptographically secure random bytes.
-pub trait SecureRandom: 'static {
+pub trait SecureRandom: RuntimeSendSync + 'static {
     /// Fills `dest` with cryptographically secure random bytes.
     ///
     /// Preconditions:
@@ -63,7 +88,7 @@ pub trait SecureRandom: 'static {
 }
 
 /// Generates framework record IDs.
-pub trait IdGenerator: 'static {
+pub trait IdGenerator: RuntimeSendSync + 'static {
     /// Generates an ID for `kind`.
     ///
     /// Preconditions:
@@ -82,7 +107,7 @@ pub trait IdGenerator: 'static {
 }
 
 /// Generates session tokens from the configured entropy and formatting policy.
-pub trait SessionTokenGenerator: 'static {
+pub trait SessionTokenGenerator: RuntimeSendSync + 'static {
     /// Generates a new session token.
     ///
     /// Preconditions:
@@ -204,6 +229,115 @@ pub type NativeDynSecureRandom = dyn SecureRandom + Send + Sync;
 pub type NativeDynIdGenerator = dyn IdGenerator + Send + Sync;
 pub type NativeDynSessionTokenGenerator = dyn SessionTokenGenerator + Send + Sync;
 pub type NativeDynOAuthHttpClient = dyn OAuthHttpClient + Send + Sync;
+
+/// Shared runtime capability set used by [`crate::config::AuthConfig`].
+///
+/// Native builds store `Arc<dyn ...>` values whose traits retain `Send + Sync`
+/// through [`RuntimeSendSync`]. `local-futures` builds store `Rc<dyn ...>` so
+/// Worker-local adapters are not forced into thread-safe trait objects.
+#[derive(Clone)]
+pub struct AuthRuntimeCapabilities {
+    pub clock: SharedClock,
+    pub secure_random: SharedSecureRandom,
+    pub id_generator: SharedIdGenerator,
+    pub session_tokens: SharedSessionTokenGenerator,
+    pub oauth_http: SharedOAuthHttpClient,
+}
+
+impl AuthRuntimeCapabilities {
+    pub fn new(
+        clock: SharedClock,
+        secure_random: SharedSecureRandom,
+        id_generator: SharedIdGenerator,
+        session_tokens: SharedSessionTokenGenerator,
+        oauth_http: SharedOAuthHttpClient,
+    ) -> Self {
+        Self {
+            clock,
+            secure_random,
+            id_generator,
+            session_tokens,
+            oauth_http,
+        }
+    }
+}
+
+impl Default for AuthRuntimeCapabilities {
+    fn default() -> Self {
+        #[cfg(not(feature = "local-futures"))]
+        {
+            Self::new(
+                std::sync::Arc::new(SystemClock),
+                std::sync::Arc::new(UnavailableSecureRandom),
+                std::sync::Arc::new(NativeIdGenerator),
+                std::sync::Arc::new(NativeSessionTokenGenerator),
+                std::sync::Arc::new(UnavailableOAuthHttpClient),
+            )
+        }
+
+        #[cfg(feature = "local-futures")]
+        {
+            Self::new(
+                std::rc::Rc::new(SystemClock),
+                std::rc::Rc::new(UnavailableSecureRandom),
+                std::rc::Rc::new(NativeIdGenerator),
+                std::rc::Rc::new(NativeSessionTokenGenerator),
+                std::rc::Rc::new(UnavailableOAuthHttpClient),
+            )
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UnavailableSecureRandom;
+
+impl SecureRandom for UnavailableSecureRandom {
+    fn fill_bytes(&self, _dest: &mut [u8]) -> AuthResult<()> {
+        Err(AuthError::config(
+            "Secure random bytes require an injected SecureRandom capability",
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NativeIdGenerator;
+
+impl IdGenerator for NativeIdGenerator {
+    fn generate_id(&self, kind: IdKind) -> AuthResult<String> {
+        crate::utils::id::new_required_id(&format!("{kind:?}"))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSessionTokenGenerator;
+
+impl SessionTokenGenerator for NativeSessionTokenGenerator {
+    fn generate_session_token(&self) -> AuthResult<String> {
+        crate::utils::id::new_session_token()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UnavailableOAuthHttpClient;
+
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl OAuthHttpClient for UnavailableOAuthHttpClient {
+    async fn send(&self, _request: OAuthHttpRequest) -> AuthResult<OAuthHttpResponse> {
+        Err(AuthError::config(
+            "OAuth HTTP requests require an injected OAuthHttpClient capability",
+        ))
+    }
+}
 
 pub type LocalRuntimeCapabilitiesDyn = RuntimeCapabilities<
     Box<DynClock>,

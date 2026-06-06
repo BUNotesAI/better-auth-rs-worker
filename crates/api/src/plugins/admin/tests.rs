@@ -151,7 +151,10 @@ async fn test_custom_admin_role() {
 
     let admin_session = database
         .create_session(CreateSession {
+            id: None,
+            token: None,
             user_id: admin.id.clone(),
+            created_at: None,
             expires_at: Utc::now() + Duration::hours(24),
             ip_address: None,
             user_agent: None,

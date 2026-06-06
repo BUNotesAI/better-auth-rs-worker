@@ -540,9 +540,15 @@ pub mod sqlx_adapter {
         type Session = S;
 
         async fn create_session(&self, create_session: CreateSession) -> AuthResult<S> {
-            let id = Uuid::new_v4().to_string();
-            let token = format!("session_{}", Uuid::new_v4());
-            let now = Utc::now();
+            let id = create_session
+                .id
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let token = create_session
+                .token
+                .clone()
+                .unwrap_or_else(|| format!("session_{}", Uuid::new_v4()));
+            let now = create_session.created_at.unwrap_or_else(Utc::now);
 
             let sql = format!(
                 "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *",

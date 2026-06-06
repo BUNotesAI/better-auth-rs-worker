@@ -228,7 +228,10 @@ pub(crate) async fn impersonate_user_core<DB: DatabaseAdapter>(
 
     let expires_at = Utc::now() + ctx.config.session.expires_in;
     let create_session = CreateSession {
+        id: None,
+        token: None,
         user_id: target.id().to_string(),
+        created_at: None,
         expires_at,
         ip_address: ip_address.map(|s| s.to_string()),
         user_agent: user_agent.map(|s| s.to_string()),
@@ -268,7 +271,10 @@ pub(crate) async fn stop_impersonating_core<DB: DatabaseAdapter>(
 
     let expires_at = Utc::now() + ctx.config.session.expires_in;
     let create_session = CreateSession {
+        id: None,
+        token: None,
         user_id: admin_id,
+        created_at: None,
         expires_at,
         ip_address: ip_address.map(|s| s.to_string()),
         user_agent: user_agent.map(|s| s.to_string()),
