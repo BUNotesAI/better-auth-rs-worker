@@ -54,7 +54,7 @@ chrono = { version = "0.4", features = ["serde"] }
 cookie = "0.18"
 
 # Data structures
-uuid = { version = "1.18", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.18", default-features = false, features = ["serde"] }
 
 # Validation
 validator = { version = "0.19", features = ["derive"] }
@@ -88,8 +88,18 @@ syn = { version = "2", features = ["full"] }
 
 [features]
 default = ["native-tls"]
-native-tls = ["better-auth-api/native-tls"]
-rustls = ["better-auth-api/rustls"]
+native-tls = [
+    "better-auth-api/native-tls",
+    "better-auth-core/jwt",
+    "better-auth-core/password-argon2",
+    "better-auth-core/native-id",
+]
+rustls = [
+    "better-auth-api/rustls",
+    "better-auth-core/jwt",
+    "better-auth-core/password-argon2",
+    "better-auth-core/native-id",
+]
 axum = ["dep:axum", "dep:tower", "dep:url", "better-auth-core/axum"]
 derive = ["better-auth-core/derive"]
 sqlx-postgres = ["dep:sqlx", "better-auth-core/sqlx-postgres"]
@@ -117,7 +127,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 
 # Data structures
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v7"] }
 
 # Crypto
 argon2 = { workspace = true }
@@ -160,6 +170,10 @@ required-features = ["sqlx-postgres"]
 [[example]]
 name = "custom_entities"
 required-features = ["derive"]
+
+[[example]]
+name = "shared_sqlx_pool"
+required-features = ["sqlx-postgres"]
 
 [[bin]]
 name = "sync_better_auth_openapi"

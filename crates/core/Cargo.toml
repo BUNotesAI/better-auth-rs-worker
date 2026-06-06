@@ -8,7 +8,6 @@ repository = { workspace = true }
 
 [dependencies]
 # Asynchronous runtime
-tokio = { workspace = true }
 async-trait = { workspace = true }
 
 # Serialization
@@ -25,7 +24,7 @@ validator = { workspace = true }
 chrono = { workspace = true }
 
 # Data structures
-uuid = { workspace = true }
+uuid = { workspace = true, optional = true }
 
 # Cookie parsing
 cookie = { workspace = true }
@@ -33,10 +32,10 @@ cookie = { workspace = true }
 # Pattern matching
 glob-match = "0.2.1"
 # Crypto
-argon2 = { workspace = true }
-rand = { workspace = true }
+argon2 = { workspace = true, optional = true }
+password-hash = { version = "0.5", optional = true, features = ["getrandom"] }
 base64 = { workspace = true }
-jsonwebtoken = { workspace = true }
+jsonwebtoken = { workspace = true, optional = true }
 
 # Database (optional)
 sqlx = { workspace = true, optional = true }
@@ -52,9 +51,15 @@ url = { workspace = true }
 idna = "1"
 tracing.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+
 [features]
 default = []
 derive = ["dep:better-auth-derive"]
-sqlx-postgres = ["dep:sqlx"]
+jwt = ["dep:jsonwebtoken"]
+password-argon2 = ["dep:argon2", "dep:password-hash"]
+native-id = ["dep:uuid", "uuid/v4"]
+sqlx-postgres = ["dep:sqlx", "native-id"]
 redis-cache = ["dep:redis"]
 axum = ["dep:axum", "dep:http-body-util"]

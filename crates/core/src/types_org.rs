@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Organization entity - matches OpenAPI schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,7 +127,7 @@ pub struct CreateOrganization {
 impl CreateOrganization {
     pub fn new(name: impl Into<String>, slug: impl Into<String>) -> Self {
         Self {
-            id: Some(Uuid::new_v4().to_string()),
+            id: crate::utils::id::new_optional_uuid_v4_string(),
             name: name.into(),
             slug: slug.into(),
             logo: None,

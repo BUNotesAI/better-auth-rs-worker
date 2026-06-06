@@ -6,10 +6,13 @@
 
 use std::sync::Arc;
 
-use argon2::password_hash::{PasswordHash, SaltString, rand_core::OsRng};
-use argon2::{Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier};
 use async_trait::async_trait;
 use serde::Serialize;
+
+#[cfg(feature = "password-argon2")]
+use argon2::password_hash::{PasswordHash, SaltString, rand_core::OsRng};
+#[cfg(feature = "password-argon2")]
+use argon2::{Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier};
 
 use crate::adapters::DatabaseAdapter;
 use crate::error::{AuthError, AuthResult};
@@ -46,6 +49,11 @@ pub async fn hash_password(
         return hasher.hash(password).await;
     }
 
+    hash_password_default(password)
+}
+
+#[cfg(feature = "password-argon2")]
+fn hash_password_default(password: &str) -> AuthResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
 
@@ -54,6 +62,14 @@ pub async fn hash_password(
         .map_err(|e| AuthError::PasswordHash(format!("Failed to hash password: {}", e)))?;
 
     Ok(password_hash.to_string())
+}
+
+#[cfg(not(feature = "password-argon2"))]
+fn hash_password_default(_password: &str) -> AuthResult<String> {
+    Err(AuthError::PasswordHash(
+        "Default password hashing requires the `password-argon2` feature or an injected PasswordHasher"
+            .to_string(),
+    ))
 }
 
 /// Verify `password` against `hash` using the custom `hasher` (if provided) or
@@ -74,6 +90,11 @@ pub async fn verify_password(
         });
     }
 
+    verify_password_default(password, hash)
+}
+
+#[cfg(feature = "password-argon2")]
+fn verify_password_default(password: &str, hash: &str) -> AuthResult<()> {
     let parsed_hash = PasswordHash::new(hash)
         .map_err(|e| AuthError::PasswordHash(format!("Invalid password hash: {}", e)))?;
 
@@ -83,6 +104,14 @@ pub async fn verify_password(
         .map_err(|_| AuthError::InvalidCredentials)?;
 
     Ok(())
+}
+
+#[cfg(not(feature = "password-argon2"))]
+fn verify_password_default(_password: &str, _hash: &str) -> AuthResult<()> {
+    Err(AuthError::PasswordHash(
+        "Default password verification requires the `password-argon2` feature or an injected PasswordHasher"
+            .to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

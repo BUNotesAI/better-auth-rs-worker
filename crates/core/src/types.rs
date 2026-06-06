@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
 use validator::Validate;
 
 // Re-export organization types
@@ -387,7 +386,7 @@ pub struct CreateVerification {
 impl CreateUser {
     pub fn new() -> Self {
         Self {
-            id: Some(Uuid::new_v4().to_string()),
+            id: crate::utils::id::new_optional_uuid_v4_string(),
             email: None,
             name: None,
             image: None,

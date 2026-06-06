@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
 
 use crate::error::{AuthError, AuthResult};
 use crate::types::{
@@ -12,6 +11,7 @@ use crate::types::{
     Passkey, Session, TwoFactor, UpdateAccount, UpdateApiKey, UpdateOrganization, UpdateUser, User,
     Verification,
 };
+use crate::utils::id::{new_required_id, new_session_token, supplied_or_generated_id};
 
 pub use super::memory_traits::{
     MemoryAccount, MemoryApiKey, MemoryInvitation, MemoryMember, MemoryOrganization, MemoryPasskey,
@@ -113,10 +113,7 @@ where
         let mut email_index = self.email_index.lock().unwrap();
         let mut username_index = self.username_index.lock().unwrap();
 
-        let id = create_user
-            .id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let id = supplied_or_generated_id(create_user.id.clone(), "user")?;
 
         if let Some(email) = &create_user.email
             && email_index.contains_key(email)
@@ -306,8 +303,8 @@ where
     async fn create_session(&self, create_session: CreateSession) -> AuthResult<S> {
         let mut sessions = self.sessions.lock().unwrap();
 
-        let id = Uuid::new_v4().to_string();
-        let token = format!("session_{}", Uuid::new_v4());
+        let id = new_required_id("session")?;
+        let token = new_session_token()?;
         let now = Utc::now();
         let session = S::from_create(id, token.clone(), &create_session, now);
 
@@ -394,7 +391,7 @@ where
     async fn create_account(&self, create_account: CreateAccount) -> AuthResult<A> {
         let mut accounts = self.accounts.lock().unwrap();
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("account")?;
         let now = Utc::now();
         let account = A::from_create(id.clone(), &create_account, now);
 
@@ -458,7 +455,7 @@ where
     async fn create_verification(&self, create_verification: CreateVerification) -> AuthResult<V> {
         let mut verifications = self.verifications.lock().unwrap();
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("verification")?;
         let now = Utc::now();
         let verification = V::from_create(id.clone(), &create_verification, now);
 
@@ -561,7 +558,7 @@ where
         let id = create_org
             .id
             .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .map_or_else(|| new_required_id("organization"), Ok)?;
         let now = Utc::now();
         let organization = O::from_create(id.clone(), &create_org, now);
 
@@ -676,7 +673,7 @@ where
             ));
         }
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("member")?;
         let now = Utc::now();
         let member = M::from_create(id.clone(), &create_member, now);
 
@@ -757,7 +754,7 @@ where
     async fn create_invitation(&self, create_inv: CreateInvitation) -> AuthResult<I> {
         let mut invitations = self.invitations.lock().unwrap();
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("invitation")?;
         let now = Utc::now();
         let invitation = I::from_create(id.clone(), &create_inv, now);
 
@@ -845,7 +842,7 @@ where
             ));
         }
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("two-factor")?;
         let now = Utc::now();
         let two_factor: TwoFactor = MemoryTwoFactor::from_create(id.clone(), &create, now);
 
@@ -905,7 +902,7 @@ where
             return Err(AuthError::conflict("API key already exists"));
         }
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("API key")?;
         let now = Utc::now();
         let api_key: ApiKey = MemoryApiKey::from_create(id.clone(), &input, now);
 
@@ -991,7 +988,7 @@ where
             ));
         }
 
-        let id = Uuid::new_v4().to_string();
+        let id = new_required_id("passkey")?;
         let now = Utc::now();
         let passkey = P::from_create(id.clone(), &input, now);
 

@@ -319,7 +319,7 @@ dependencies = [
  "http-body-util",
  "idna",
  "jsonwebtoken",
- "rand 0.8.5",
+ "password-hash",
  "redis",
  "serde",
  "serde_json",

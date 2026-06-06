@@ -68,7 +68,14 @@ pub enum AuthError {
     PasswordHash(String),
 
     #[error("JWT error: {0}")]
-    Jwt(#[from] jsonwebtoken::errors::Error),
+    Jwt(String),
+}
+
+#[cfg(feature = "jwt")]
+impl From<jsonwebtoken::errors::Error> for AuthError {
+    fn from(err: jsonwebtoken::errors::Error) -> Self {
+        Self::Jwt(err.to_string())
+    }
 }
 
 impl AuthError {
