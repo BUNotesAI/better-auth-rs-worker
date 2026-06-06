@@ -88,6 +88,10 @@ syn = { version = "2", features = ["full"] }
 
 [features]
 default = ["native-tls"]
+local-futures = [
+    "better-auth-core/local-futures",
+    "better-auth-api/local-futures",
+]
 native-tls = [
     "better-auth-api/native-tls",
     "better-auth-core/jwt",

@@ -8,6 +8,7 @@ use crate::email::EmailProvider;
 use crate::entity::AuthSession;
 use crate::error::{AuthError, AuthResult};
 use crate::session::SessionManager;
+use crate::threading::RuntimeSendSync;
 use crate::types::{AuthRequest, AuthResponse, HttpMethod};
 
 /// Action returned by [`AuthPlugin::before_request`].
@@ -26,8 +27,9 @@ pub enum BeforeRequestAction {
 ///
 /// Generic over `DB` so that lifecycle hooks receive the adapter's concrete
 /// entity types (e.g., `DB::User`, `DB::Session`).
-#[async_trait]
-pub trait AuthPlugin<DB: DatabaseAdapter>: Send + Sync {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait AuthPlugin<DB: DatabaseAdapter>: RuntimeSendSync + 'static {
     /// Plugin name - should be unique
     fn name(&self) -> &'static str;
 
@@ -106,6 +108,13 @@ pub trait AuthPlugin<DB: DatabaseAdapter>: Send + Sync {
 /// - `UserManagementPlugin` — conditional routes based on config
 /// - `PasswordManagementPlugin` — dynamic path matching for `/reset-password/{token}`
 /// - `OrganizationPlugin` — handlers accept extra `&self.config` argument
+///
+/// # `local-futures`
+///
+/// Downstream crates that use this macro and enable
+/// `better-auth-core/local-futures` must also define and enable a crate-local
+/// `local-futures` feature. Macro `cfg(feature = "...")` attributes are
+/// evaluated in the downstream crate where the macro expands.
 #[macro_export]
 macro_rules! impl_auth_plugin {
     (@pat get) => { $crate::HttpMethod::Get };
@@ -127,7 +136,8 @@ macro_rules! impl_auth_plugin {
         }
         $( extra { $($extra:tt)* } )?
     ) => {
-        #[::async_trait::async_trait]
+        #[cfg_attr(feature = "local-futures", ::async_trait::async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), ::async_trait::async_trait)]
         impl<DB: $crate::adapters::DatabaseAdapter> $crate::AuthPlugin<DB> for $plugin {
             fn name(&self) -> &'static str { $name }
 
@@ -172,6 +182,16 @@ pub struct AuthContext<DB: DatabaseAdapter> {
     pub database: Arc<DB>,
     pub email_provider: Option<Arc<dyn EmailProvider>>,
     pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Native multi-thread marker for plugins used by threaded web runtimes.
+pub trait NativeAuthPlugin<DB: DatabaseAdapter>: AuthPlugin<DB> + Send + Sync {}
+
+impl<DB, T> NativeAuthPlugin<DB> for T
+where
+    DB: DatabaseAdapter,
+    T: AuthPlugin<DB> + Send + Sync,
+{
 }
 
 impl AuthRoute {
@@ -311,7 +331,7 @@ impl<DB: DatabaseAdapter> AuthState<DB> {
 /// abstraction, `AxumPlugin` returns a standard `axum::Router` with handlers
 /// already bound to routes. This eliminates the triple route-matching overhead
 /// and enables use of axum extractors.
-#[cfg(feature = "axum")]
+#[cfg(all(feature = "axum", not(feature = "local-futures")))]
 #[async_trait]
 pub trait AxumPlugin<DB: DatabaseAdapter>: Send + Sync {
     /// Plugin name — should be unique and match the `AuthPlugin` name when

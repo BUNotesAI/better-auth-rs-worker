@@ -44,7 +44,8 @@ impl Default for OAuthPlugin {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> AuthPlugin<DB> for OAuthPlugin {
     fn name(&self) -> &'static str {
         "oauth"

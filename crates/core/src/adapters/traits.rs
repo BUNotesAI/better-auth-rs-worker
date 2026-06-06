@@ -6,6 +6,7 @@ use crate::entity::{
     AuthSession, AuthTwoFactor, AuthUser, AuthVerification,
 };
 use crate::error::AuthResult;
+use crate::threading::RuntimeSendSync;
 use crate::types::{
     CreateAccount, CreateApiKey, CreateInvitation, CreateMember, CreateOrganization, CreatePasskey,
     CreateSession, CreateTwoFactor, CreateUser, CreateVerification, InvitationStatus,
@@ -13,8 +14,9 @@ use crate::types::{
 };
 
 /// User persistence operations.
-#[async_trait]
-pub trait UserOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait UserOps: RuntimeSendSync + 'static {
     type User: AuthUser;
 
     async fn create_user(&self, user: CreateUser) -> AuthResult<Self::User>;
@@ -29,8 +31,9 @@ pub trait UserOps: Send + Sync + 'static {
 }
 
 /// Session persistence operations.
-#[async_trait]
-pub trait SessionOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait SessionOps: RuntimeSendSync + 'static {
     type Session: AuthSession;
 
     async fn create_session(&self, session: CreateSession) -> AuthResult<Self::Session>;
@@ -49,8 +52,9 @@ pub trait SessionOps: Send + Sync + 'static {
 }
 
 /// Account (OAuth provider linking) persistence operations.
-#[async_trait]
-pub trait AccountOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait AccountOps: RuntimeSendSync + 'static {
     type Account: AuthAccount;
 
     async fn create_account(&self, account: CreateAccount) -> AuthResult<Self::Account>;
@@ -65,8 +69,9 @@ pub trait AccountOps: Send + Sync + 'static {
 }
 
 /// Verification token persistence operations.
-#[async_trait]
-pub trait VerificationOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait VerificationOps: RuntimeSendSync + 'static {
     type Verification: AuthVerification;
 
     async fn create_verification(
@@ -104,8 +109,9 @@ pub trait VerificationOps: Send + Sync + 'static {
 }
 
 /// Organization persistence operations.
-#[async_trait]
-pub trait OrganizationOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait OrganizationOps: RuntimeSendSync + 'static {
     type Organization: AuthOrganization;
 
     async fn create_organization(&self, org: CreateOrganization) -> AuthResult<Self::Organization>;
@@ -121,8 +127,9 @@ pub trait OrganizationOps: Send + Sync + 'static {
 }
 
 /// Organization member persistence operations.
-#[async_trait]
-pub trait MemberOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait MemberOps: RuntimeSendSync + 'static {
     type Member: AuthMember;
 
     async fn create_member(&self, member: CreateMember) -> AuthResult<Self::Member>;
@@ -143,8 +150,9 @@ pub trait MemberOps: Send + Sync + 'static {
 }
 
 /// Invitation persistence operations.
-#[async_trait]
-pub trait InvitationOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait InvitationOps: RuntimeSendSync + 'static {
     type Invitation: AuthInvitation;
 
     async fn create_invitation(&self, invitation: CreateInvitation)
@@ -168,8 +176,9 @@ pub trait InvitationOps: Send + Sync + 'static {
 }
 
 /// Two-factor authentication persistence operations.
-#[async_trait]
-pub trait TwoFactorOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait TwoFactorOps: RuntimeSendSync + 'static {
     type TwoFactor: AuthTwoFactor;
 
     async fn create_two_factor(&self, two_factor: CreateTwoFactor) -> AuthResult<Self::TwoFactor>;
@@ -184,8 +193,9 @@ pub trait TwoFactorOps: Send + Sync + 'static {
 }
 
 /// API key persistence operations.
-#[async_trait]
-pub trait ApiKeyOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait ApiKeyOps: RuntimeSendSync + 'static {
     type ApiKey: AuthApiKey;
 
     async fn create_api_key(&self, input: CreateApiKey) -> AuthResult<Self::ApiKey>;
@@ -199,8 +209,9 @@ pub trait ApiKeyOps: Send + Sync + 'static {
 }
 
 /// Passkey persistence operations.
-#[async_trait]
-pub trait PasskeyOps: Send + Sync + 'static {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait PasskeyOps: RuntimeSendSync + 'static {
     type Passkey: AuthPasskey;
 
     async fn create_passkey(&self, input: CreatePasskey) -> AuthResult<Self::Passkey>;

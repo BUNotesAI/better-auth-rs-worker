@@ -8,6 +8,7 @@ use crate::adapters::database::{
     UserOps, VerificationOps,
 };
 use crate::error::AuthResult;
+use crate::threading::RuntimeSendSync;
 use crate::types::{
     CreateAccount, CreateApiKey, CreateInvitation, CreateMember, CreateOrganization, CreateSession,
     CreateTwoFactor, CreateUser, CreateVerification, InvitationStatus, ListUsersParams,
@@ -21,8 +22,9 @@ use crate::types::{
 ///
 /// The `DB` type parameter determines the concrete entity types used in
 /// `after_*` hooks (e.g., `after_create_user` receives `&DB::User`).
-#[async_trait]
-pub trait DatabaseHooks<DB: DatabaseAdapter>: Send + Sync {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait DatabaseHooks<DB: DatabaseAdapter>: RuntimeSendSync + 'static {
     async fn before_create_user(&self, user: &mut CreateUser) -> AuthResult<()> {
         let _ = user;
         Ok(())
@@ -137,6 +139,16 @@ pub struct HookedDatabaseAdapter<DB: DatabaseAdapter> {
     hooks: Vec<Arc<dyn DatabaseHooks<DB>>>,
 }
 
+/// Native multi-thread marker for database hooks used by threaded runtimes.
+pub trait NativeDatabaseHooks<DB: DatabaseAdapter>: DatabaseHooks<DB> + Send + Sync {}
+
+impl<DB, T> NativeDatabaseHooks<DB> for T
+where
+    DB: DatabaseAdapter,
+    T: DatabaseHooks<DB> + Send + Sync,
+{
+}
+
 impl<DB: DatabaseAdapter> HookedDatabaseAdapter<DB> {
     pub fn new(inner: Arc<DB>) -> Self {
         Self {
@@ -203,7 +215,8 @@ macro_rules! hooked_delete {
     }};
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> UserOps for HookedDatabaseAdapter<DB> {
     type User = DB::User;
 
@@ -249,7 +262,8 @@ impl<DB: DatabaseAdapter> UserOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> SessionOps for HookedDatabaseAdapter<DB> {
     type Session = DB::Session;
 
@@ -308,7 +322,8 @@ impl<DB: DatabaseAdapter> SessionOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> AccountOps for HookedDatabaseAdapter<DB> {
     type Account = DB::Account;
 
@@ -360,7 +375,8 @@ impl<DB: DatabaseAdapter> AccountOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> VerificationOps for HookedDatabaseAdapter<DB> {
     type Verification = DB::Verification;
 
@@ -422,7 +438,8 @@ impl<DB: DatabaseAdapter> VerificationOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> OrganizationOps for HookedDatabaseAdapter<DB> {
     type Organization = DB::Organization;
 
@@ -455,7 +472,8 @@ impl<DB: DatabaseAdapter> OrganizationOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> MemberOps for HookedDatabaseAdapter<DB> {
     type Member = DB::Member;
 
@@ -499,7 +517,8 @@ impl<DB: DatabaseAdapter> MemberOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> InvitationOps for HookedDatabaseAdapter<DB> {
     type Invitation = DB::Invitation;
 
@@ -546,7 +565,8 @@ impl<DB: DatabaseAdapter> InvitationOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> TwoFactorOps for HookedDatabaseAdapter<DB> {
     type TwoFactor = DB::TwoFactor;
 
@@ -576,7 +596,8 @@ impl<DB: DatabaseAdapter> TwoFactorOps for HookedDatabaseAdapter<DB> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> ApiKeyOps for HookedDatabaseAdapter<DB> {
     type ApiKey = DB::ApiKey;
 
@@ -670,7 +691,8 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl DatabaseHooks<MemoryDatabaseAdapter> for CountingHook {
         // user hooks
         async fn before_create_user(&self, _user: &mut CreateUser) -> AuthResult<()> {
@@ -840,7 +862,8 @@ mod tests {
     async fn test_before_hook_can_reject() {
         struct RejectHook;
 
-        #[async_trait]
+        #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), async_trait)]
         impl DatabaseHooks<MemoryDatabaseAdapter> for RejectHook {
             async fn before_create_user(&self, _user: &mut CreateUser) -> AuthResult<()> {
                 Err(crate::error::AuthError::forbidden("Hook rejected"))
@@ -959,7 +982,8 @@ mod tests {
     async fn test_account_before_hook_can_reject() {
         struct RejectAccountHook;
 
-        #[async_trait]
+        #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), async_trait)]
         impl DatabaseHooks<MemoryDatabaseAdapter> for RejectAccountHook {
             async fn before_create_account(&self, _account: &mut CreateAccount) -> AuthResult<()> {
                 Err(crate::error::AuthError::forbidden("Account hook rejected"))
@@ -1034,7 +1058,8 @@ mod tests {
     async fn test_verification_before_hook_can_reject() {
         struct RejectVerificationHook;
 
-        #[async_trait]
+        #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+        #[cfg_attr(not(feature = "local-futures"), async_trait)]
         impl DatabaseHooks<MemoryDatabaseAdapter> for RejectVerificationHook {
             async fn before_create_verification(
                 &self,

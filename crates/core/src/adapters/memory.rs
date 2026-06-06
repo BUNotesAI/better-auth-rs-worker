@@ -94,7 +94,8 @@ impl<U, S, A, O, M, I, V, P> Default for MemoryDatabaseAdapter<U, S, A, O, M, I,
 
 // -- UserOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> UserOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -286,7 +287,8 @@ where
 
 // -- SessionOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> SessionOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -374,7 +376,8 @@ where
 
 // -- AccountOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> AccountOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -438,7 +441,8 @@ where
 
 // -- VerificationOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> VerificationOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -533,7 +537,8 @@ where
 
 // -- OrganizationOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> OrganizationOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -645,7 +650,8 @@ where
 
 // -- MemberOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> MemberOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -737,7 +743,8 @@ where
 
 // -- InvitationOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> InvitationOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -818,7 +825,8 @@ where
 
 // -- TwoFactorOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> TwoFactorOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -881,7 +889,8 @@ where
 
 // -- ApiKeyOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> ApiKeyOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,
@@ -964,7 +973,8 @@ where
 
 // -- PasskeyOps --
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<U, S, A, O, M, I, V, P> PasskeyOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
 where
     U: MemoryUser,

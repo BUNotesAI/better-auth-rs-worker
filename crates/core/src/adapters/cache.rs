@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::error::AuthResult;
+use crate::threading::RuntimeSendSync;
 
 /// Cache adapter trait for session caching
-#[async_trait]
-pub trait CacheAdapter: Send + Sync {
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait CacheAdapter: RuntimeSendSync + 'static {
     /// Set a value with expiration
     async fn set(&self, key: &str, value: &str, expires_in: Duration) -> AuthResult<()>;
 
@@ -59,7 +61,8 @@ impl Default for MemoryCacheAdapter {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl CacheAdapter for MemoryCacheAdapter {
     async fn set(&self, key: &str, value: &str, expires_in: Duration) -> AuthResult<()> {
         self.cleanup_expired();
@@ -146,7 +149,8 @@ pub mod redis_adapter {
         }
     }
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl CacheAdapter for RedisAdapter {
         async fn set(&self, key: &str, value: &str, expires_in: Duration) -> AuthResult<()> {
             let mut conn = self

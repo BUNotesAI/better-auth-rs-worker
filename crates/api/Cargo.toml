@@ -57,6 +57,7 @@ tokio = { workspace = true }
 
 [features]
 default = ["native-tls"]
+local-futures = ["better-auth-core/local-futures"]
 native-tls = [
     "reqwest/default-tls",
     "better-auth-core/jwt",

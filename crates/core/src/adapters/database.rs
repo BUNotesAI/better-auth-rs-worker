@@ -39,6 +39,17 @@ impl<T> DatabaseAdapter for T where
 {
 }
 
+/// Native multi-thread marker for callers that need to share adapters across
+/// executor threads.
+///
+/// The portable [`DatabaseAdapter`] trait intentionally does not require
+/// `Send` or `Sync`; Worker adapters may be local to one event loop. Native
+/// integrations can add this bound at their boundary when their runtime or web
+/// framework requires shared state.
+pub trait NativeDatabaseAdapter: DatabaseAdapter + Send + Sync {}
+
+impl<T> NativeDatabaseAdapter for T where T: DatabaseAdapter + Send + Sync {}
+
 #[cfg(feature = "sqlx-postgres")]
 pub mod sqlx_adapter {
     use super::*;
@@ -197,7 +208,8 @@ pub mod sqlx_adapter {
 
     // -- UserOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> UserOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -510,7 +522,8 @@ pub mod sqlx_adapter {
 
     // -- SessionOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> SessionOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -668,7 +681,8 @@ pub mod sqlx_adapter {
 
     // -- AccountOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> AccountOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -816,7 +830,8 @@ pub mod sqlx_adapter {
 
     // -- VerificationOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> VerificationOps
         for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
@@ -957,7 +972,8 @@ pub mod sqlx_adapter {
 
     // -- OrganizationOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> OrganizationOps
         for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
@@ -1093,7 +1109,8 @@ pub mod sqlx_adapter {
 
     // -- MemberOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> MemberOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -1234,7 +1251,8 @@ pub mod sqlx_adapter {
 
     // -- InvitationOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> InvitationOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -1366,7 +1384,8 @@ pub mod sqlx_adapter {
 
     // -- TwoFactorOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> TwoFactorOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -1455,7 +1474,8 @@ pub mod sqlx_adapter {
 
     // -- ApiKeyOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> ApiKeyOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,
@@ -1670,7 +1690,8 @@ pub mod sqlx_adapter {
 
     // -- PasskeyOps --
 
-    #[async_trait]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
     impl<U, S, A, O, M, I, V, TF, AK, PK> PasskeyOps for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
     where
         U: AuthUser + AuthUserMeta + SqlxEntity,

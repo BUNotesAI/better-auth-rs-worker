@@ -42,7 +42,8 @@ struct GetSessionResponse<S: Serialize, U: Serialize> {
     user: U,
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> AuthPlugin<DB> for SessionManagementPlugin {
     fn name(&self) -> &'static str {
         "session-management"

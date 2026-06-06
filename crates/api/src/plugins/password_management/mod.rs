@@ -95,7 +95,8 @@ impl std::fmt::Debug for PasswordManagementConfig {
     }
 }
 
-#[async_trait]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
 impl<DB: DatabaseAdapter> AuthPlugin<DB> for PasswordManagementPlugin {
     fn name(&self) -> &'static str {
         "password-management"

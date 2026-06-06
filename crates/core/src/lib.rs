@@ -3,17 +3,25 @@
 //! Core abstractions for the Better Auth authentication framework.
 //! Contains traits, types, configuration, and error handling.
 
+#[cfg(all(feature = "axum", feature = "local-futures"))]
+compile_error!(
+    "`axum` requires Send futures and is mutually exclusive with `local-futures`; build native Axum and Worker local-futures targets separately"
+);
+
 pub mod adapters;
+pub mod capabilities;
 pub mod config;
 pub mod email;
 pub mod entity;
 pub mod error;
+#[cfg(all(feature = "axum", not(feature = "local-futures")))]
 pub mod extractors;
 pub mod hooks;
 pub mod middleware;
 pub mod openapi;
 pub mod plugin;
 pub mod session;
+pub mod threading;
 pub mod types;
 pub mod types_impls;
 pub mod types_org;
@@ -28,11 +36,18 @@ pub use adapters::{
     AccountOps, ApiKeyOps, CacheAdapter, DatabaseAdapter, InvitationOps, MemberOps, MemoryAccount,
     MemoryApiKey, MemoryCacheAdapter, MemoryDatabaseAdapter, MemoryInvitation, MemoryMember,
     MemoryOrganization, MemoryPasskey, MemorySession, MemoryTwoFactor, MemoryUser,
-    MemoryVerification, OrganizationOps, PasskeyOps, SessionOps, TwoFactorOps, UserOps,
-    VerificationOps,
+    MemoryVerification, NativeDatabaseAdapter, OrganizationOps, PasskeyOps, SessionOps,
+    TwoFactorOps, UserOps, VerificationOps,
 };
 #[cfg(feature = "sqlx-postgres")]
 pub use adapters::{SqlxAdapter, SqlxEntity};
+pub use capabilities::{
+    Clock, DynClock, DynIdGenerator, DynOAuthHttpClient, DynSecureRandom, DynSessionTokenGenerator,
+    IdGenerator, IdKind, LocalRuntimeCapabilitiesDyn, NativeDynClock, NativeDynIdGenerator,
+    NativeDynOAuthHttpClient, NativeDynSecureRandom, NativeDynSessionTokenGenerator,
+    NativeRuntimeCapabilitiesDyn, OAuthHttpClient, OAuthHttpRequest, OAuthHttpResponse,
+    RuntimeCapabilities, SecureRandom, SessionTokenGenerator,
+};
 pub use config::{
     AccountConfig, AccountLinkingConfig, AdvancedConfig, AdvancedDatabaseConfig, Argon2Config,
     AuthConfig, CookieAttributes, CookieCacheConfig, CookieCacheStrategy, CookieOverride,
@@ -49,20 +64,22 @@ pub use entity::{
 pub use error::{
     AuthError, AuthResult, DatabaseError, validate_request_body, validation_error_response,
 };
-#[cfg(feature = "axum")]
+#[cfg(all(feature = "axum", not(feature = "local-futures")))]
 pub use extractors::{
     AdminRole, AdminSession, AuthRequestExt, AxumAuthResponse, CurrentSession, OptionalSession,
     Pending2faToken, ValidatedJson,
 };
-pub use hooks::{DatabaseHooks, HookedDatabaseAdapter};
+pub use hooks::{DatabaseHooks, HookedDatabaseAdapter, NativeDatabaseHooks};
 pub use middleware::{
     BodyLimitConfig, BodyLimitMiddleware, CorsConfig, CorsMiddleware, CsrfConfig, CsrfMiddleware,
     EndpointRateLimit, Middleware, RateLimitConfig, RateLimitMiddleware,
 };
 pub use openapi::{OpenApiBuilder, OpenApiInfo, OpenApiOperation, OpenApiResponse, OpenApiSpec};
-#[cfg(feature = "axum")]
+#[cfg(all(feature = "axum", not(feature = "local-futures")))]
 pub use plugin::AxumPlugin;
-pub use plugin::{AuthContext, AuthPlugin, AuthRoute, AuthState, BeforeRequestAction};
+pub use plugin::{
+    AuthContext, AuthPlugin, AuthRoute, AuthState, BeforeRequestAction, NativeAuthPlugin,
+};
 pub use session::SessionManager;
 pub use types::{
     Account, ApiKey, AuthRequest, AuthResponse, CodeMessageResponse, CreateAccount, CreateApiKey,
