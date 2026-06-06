@@ -8,7 +8,7 @@ repository = { workspace = true }
 
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/api", "crates/derive"]
+members = ["crates/core", "crates/api", "crates/derive", "crates/worker"]
 exclude = ["examples/sqlx-custom-entities", "examples/sea-orm-migration", "examples/fullstack/backend"]
 
 [workspace.package]
@@ -22,6 +22,7 @@ repository = "https://github.com/better-auth-rs/better-auth-rs"
 better-auth-core = { version = "0.10.0", path = "crates/core", default-features = false }
 better-auth-api = { version = "0.10.0", path = "crates/api", default-features = false }
 better-auth-derive = { version = "0.10.0", path = "crates/derive" }
+better-auth-worker = { version = "0.10.0", path = "crates/worker", default-features = false }
 
 # Asynchronous runtime
 tokio = { version = "1.0", features = ["full"] }

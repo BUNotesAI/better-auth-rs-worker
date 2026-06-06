@@ -1,0 +1,24 @@
+[package]
+name = "better-auth-worker"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Cloudflare Worker adapter boundary for better-auth"
+repository = { workspace = true }
+
+[dependencies]
+better-auth-api = { workspace = true, default-features = false, optional = true }
+better-auth-core = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+
+[features]
+default = []
+api-route-tests = ["dep:better-auth-api"]
+local-futures = ["better-auth-core/local-futures", "better-auth-api?/local-futures"]
