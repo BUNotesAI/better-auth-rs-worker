@@ -12,8 +12,9 @@ use cookie::{Cookie, SameSite as CookieSameSite};
 pub fn create_session_cookie(token: &str, config: &AuthConfig) -> String {
     let session_config = &config.session;
 
-    let expires_offset = cookie::time::OffsetDateTime::now_utc()
-        + cookie::time::Duration::seconds(session_config.expires_in.num_seconds());
+    let expires_at = config.runtime.clock.now() + session_config.expires_in;
+    let expires_offset = cookie::time::OffsetDateTime::from_unix_timestamp(expires_at.timestamp())
+        .unwrap_or(cookie::time::OffsetDateTime::UNIX_EPOCH);
 
     let same_site = map_same_site(&session_config.cookie_same_site);
 
@@ -63,5 +64,48 @@ fn map_same_site(s: &crate::config::SameSite) -> CookieSameSite {
         crate::config::SameSite::Strict => CookieSameSite::Strict,
         crate::config::SameSite::Lax => CookieSameSite::Lax,
         crate::config::SameSite::None => CookieSameSite::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capabilities::{
+        AuthRuntimeCapabilities, Clock, NativeIdGenerator, NativeSessionTokenGenerator,
+        UnavailableOAuthHttpClient, UnavailableSecureRandom,
+    };
+    use chrono::{Duration, TimeZone, Utc};
+    #[cfg(feature = "local-futures")]
+    use std::rc::Rc as Shared;
+    #[cfg(not(feature = "local-futures"))]
+    use std::sync::Arc as Shared;
+
+    #[derive(Clone)]
+    struct FixedClock;
+
+    impl Clock for FixedClock {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+                .single()
+                .expect("valid fixed time")
+        }
+    }
+
+    #[test]
+    fn session_cookie_expiry_uses_runtime_clock() {
+        let config = AuthConfig::new("test-secret")
+            .session_expires_in(Duration::seconds(60))
+            .runtime_capabilities(AuthRuntimeCapabilities::new(
+                Shared::new(FixedClock),
+                Shared::new(UnavailableSecureRandom),
+                Shared::new(NativeIdGenerator),
+                Shared::new(NativeSessionTokenGenerator),
+                Shared::new(UnavailableOAuthHttpClient),
+            ));
+
+        let cookie = create_session_cookie("session-token", &config);
+
+        assert!(cookie.contains("better-auth.session-token=session-token"));
+        assert!(cookie.contains("Expires=Tue, 02 Jan 2024 03:05:05 GMT"));
     }
 }

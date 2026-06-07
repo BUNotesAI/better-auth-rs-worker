@@ -15,6 +15,27 @@ These live in the workspace and are run via `cargo run --example`.
 
 These are separate Cargo projects (excluded from the workspace) under `examples/`. Run them with `cargo run --manifest-path <path-to-Cargo.toml>`.
 
+### `cloudflare-worker`
+
+Cloudflare Worker + D1 integration using the `better-auth-worker` adapter boundary. Demonstrates `worker::Request` / `worker::Response`, `Env.DB` prepared statements, explicit Worker runtime capabilities, email/password routes, and session routes.
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install worker-build --version 0.8.3
+export PATH="$HOME/.cargo/bin:$PATH"
+command -v worker-build
+cargo check --manifest-path examples/cloudflare-worker/Cargo.toml --target wasm32-unknown-unknown
+cd examples/cloudflare-worker
+npx wrangler d1 create better-auth-rs-worker
+cp wrangler.toml wrangler.local.toml
+cp .dev.vars.example .dev.vars
+npx wrangler d1 migrations apply better-auth-rs-worker --local --config wrangler.local.toml
+export PATH="$HOME/.cargo/bin:$PATH"
+npx wrangler dev --config wrangler.local.toml
+```
+
+See [`examples/cloudflare-worker/README.md`](cloudflare-worker/README.md) for full details.
+
 ### `sqlx-custom-entities`
 
 Custom entity types with PostgreSQL via raw SQLx. Each struct has extra application-specific columns (billing plan, Stripe ID, etc.) with manual `FromRow` implementations.

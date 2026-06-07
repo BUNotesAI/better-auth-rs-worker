@@ -9,7 +9,12 @@ repository = { workspace = true }
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/api", "crates/derive", "crates/worker"]
-exclude = ["examples/sqlx-custom-entities", "examples/sea-orm-migration", "examples/fullstack/backend"]
+exclude = [
+    "examples/sqlx-custom-entities",
+    "examples/sea-orm-migration",
+    "examples/fullstack/backend",
+    "examples/cloudflare-worker",
+]
 
 [workspace.package]
 version = "0.10.0"

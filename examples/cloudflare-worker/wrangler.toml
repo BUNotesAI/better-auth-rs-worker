@@ -1,0 +1,14 @@
+# Worker script name. This is separate from the D1 database name below.
+name = "better-auth-rs-cloudflare-worker"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-06-07"
+
+[build]
+command = "worker-build --release"
+
+[[d1_databases]]
+# D1 binding name. This must match DB_BINDING in src/lib.rs.
+binding = "better_auth_rs_worker"
+database_name = "better-auth-rs-worker"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../../migrations/d1"

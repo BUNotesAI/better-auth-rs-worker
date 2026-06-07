@@ -1,8 +1,36 @@
 **/target
+/target/
 .DS_Store
+/vault
+/vault/
+/node_modules/
+/dist/
+*.log
+
+# Local environment and editor state
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+
+# Cloudflare Worker local state, generated builds, and local secrets
+**/.wrangler/
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
+**/wrangler.local.toml
+**/wrangler.deploy.toml
+examples/cloudflare-worker/build/
 
 better-auth/
 
 internal-docs/
 CLAUDE.md
 AGENTS.md
+.claude/
+
+# Harness-local files should not be published with the public fork.
+/project.spec.md
+/clippy.toml
+/eslint.config.cjs

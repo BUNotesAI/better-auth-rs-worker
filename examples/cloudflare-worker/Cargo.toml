@@ -1,0 +1,22 @@
+[package]
+name = "better-auth-cloudflare-worker-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+async-trait = "0.1"
+better-auth-api = { path = "../../crates/api", default-features = false, features = ["local-futures"] }
+better-auth-core = { path = "../../crates/core", default-features = false, features = ["local-futures"] }
+better-auth-worker = { path = "../../crates/worker", default-features = false, features = ["local-futures"] }
+chrono = { version = "0.4", features = ["serde"] }
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"
+serde_json = "1"
+url = "2"
+wasm-bindgen = "0.2"
+worker = { version = "0.8.3", features = ["d1"] }
