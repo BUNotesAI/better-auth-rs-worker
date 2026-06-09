@@ -165,3 +165,358 @@ fn oauth_error_maps_to_standard_response_shape() {
     assert_eq!(invalid_grant.http_status(), 400);
     assert!(invalid_grant.www_authenticate().is_none());
 }
+
+// ===== P1: pure decisions + JWS/token logic =====
+
+use better_auth_core::{
+    AuthResult, AuthorizationCode, AuthorizationCodeRecord, JwtSigner, KeyId, Nonce, SecureRandom,
+    SigningAlg, State, SubjectId,
+};
+use chrono::{DateTime, Duration, TimeZone, Utc};
+
+use super::claims::build_id_token_claims;
+use super::decide::{
+    AuthorizeDecision, TokenGrant, authenticate_client, decide_authorization, decide_token_grant,
+};
+use super::jws::sign_id_token;
+use super::requests::{AuthenticatedSubject, AuthorizationRequest, PromptMode, TokenRequest};
+use super::token::{
+    DEFAULT_ACCESS_TOKEN_TTL_SECONDS, DEFAULT_CODE_TTL_SECONDS, expires_at, generate_access_token,
+    hash_access_token, hash_client_secret, is_expired,
+};
+
+fn fixed_now() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 6, 9, 12, 0, 0).unwrap()
+}
+
+fn confidential_client() -> OAuthClient {
+    OAuthClient {
+        client_id: ClientId::parse("conf-app").unwrap(),
+        client_type: ClientType::Confidential,
+        redirect_uris: vec![RedirectUri::parse("https://app.example/cb").unwrap()],
+        allowed_scopes: ScopeSet::parse("openid profile email").unwrap(),
+        allowed_grant_types: vec![GrantType::AuthorizationCode],
+        secret_hash: Some(hash_client_secret("s3cr3t-value-123")),
+        token_endpoint_auth_method: TokenEndpointAuthMethod::ClientSecretBasic,
+    }
+}
+
+fn authz_request(prompt: PromptMode) -> AuthorizationRequest {
+    AuthorizationRequest {
+        client_id: ClientId::parse("public-app").unwrap(),
+        redirect_uri: RedirectUri::parse("https://app.example/cb").unwrap(),
+        scope: ScopeSet::parse("openid profile email").unwrap(),
+        code_challenge: CodeChallenge::parse(RFC7636_CHALLENGE).unwrap(),
+        code_challenge_method: CodeChallengeMethod::S256,
+        nonce: Some(Nonce::new("n-123".to_string())),
+        state: Some(State::new("st-abc".to_string())),
+        prompt,
+    }
+}
+
+fn code_record(expires_at: DateTime<Utc>) -> AuthorizationCodeRecord {
+    AuthorizationCodeRecord {
+        code: AuthorizationCode::from_raw("code-xyz".to_string()),
+        client_id: ClientId::parse("public-app").unwrap(),
+        subject: SubjectId::parse("user-1").unwrap(),
+        redirect_uri: RedirectUri::parse("https://app.example/cb").unwrap(),
+        scope: ScopeSet::parse("openid profile email").unwrap(),
+        code_challenge: CodeChallenge::parse(RFC7636_CHALLENGE).unwrap(),
+        code_challenge_method: CodeChallengeMethod::S256,
+        nonce: Some(Nonce::new("n-123".to_string())),
+        auth_time: fixed_now(),
+        expires_at,
+    }
+}
+
+fn token_request(verifier: Option<&str>, secret: Option<&str>) -> TokenRequest {
+    TokenRequest {
+        client_id: ClientId::parse("public-app").unwrap(),
+        code: AuthorizationCode::from_raw("code-xyz".to_string()),
+        redirect_uri: RedirectUri::parse("https://app.example/cb").unwrap(),
+        code_verifier: verifier.map(|v| CodeVerifier::parse(v).unwrap()),
+        client_secret: secret.map(str::to_string),
+    }
+}
+
+struct FakeSigner {
+    kid: KeyId,
+    alg: SigningAlg,
+    captured: std::sync::Mutex<Option<String>>,
+}
+
+#[cfg_attr(feature = "local-futures", async_trait::async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait::async_trait)]
+impl JwtSigner for FakeSigner {
+    fn active_key(&self) -> AuthResult<(KeyId, SigningAlg)> {
+        Ok((self.kid.clone(), self.alg))
+    }
+
+    async fn sign(
+        &self,
+        _kid: &KeyId,
+        _alg: SigningAlg,
+        signing_input: &[u8],
+    ) -> AuthResult<Vec<u8>> {
+        *self.captured.lock().unwrap() = Some(String::from_utf8(signing_input.to_vec()).unwrap());
+        Ok(vec![0xABu8; 64])
+    }
+}
+
+struct FakeRandom(u8);
+
+impl SecureRandom for FakeRandom {
+    fn fill_bytes(&self, dest: &mut [u8]) -> AuthResult<()> {
+        dest.fill(self.0);
+        Ok(())
+    }
+}
+
+#[test]
+fn oidc_authorize_prompt_consent_matrix() {
+    let now = fixed_now();
+    let ttl = Duration::seconds(DEFAULT_CODE_TTL_SECONDS);
+    let sub = AuthenticatedSubject {
+        subject: SubjectId::parse("user-1").unwrap(),
+        auth_time: now,
+    };
+
+    // session + default prompt -> issue code (trusted implicit consent)
+    match decide_authorization(&authz_request(PromptMode::Default), Some(&sub), false, now, ttl) {
+        AuthorizeDecision::IssueCode(grant) => {
+            assert_eq!(grant.subject.as_str(), "user-1");
+            assert_eq!(grant.expires_at, now + ttl);
+            assert_eq!(grant.state.as_ref().map(State::as_str), Some("st-abc"));
+        }
+        other => panic!("expected IssueCode, got {other:?}"),
+    }
+
+    // session + prompt=none -> issue code
+    assert!(matches!(
+        decide_authorization(&authz_request(PromptMode::None), Some(&sub), false, now, ttl),
+        AuthorizeDecision::IssueCode(_)
+    ));
+
+    // session + prompt=login + host hook -> re-authenticate
+    assert!(matches!(
+        decide_authorization(&authz_request(PromptMode::Login), Some(&sub), true, now, ttl),
+        AuthorizeDecision::RequireLogin
+    ));
+
+    // session + prompt=login + no hook -> login_required, state echoed
+    match decide_authorization(&authz_request(PromptMode::Login), Some(&sub), false, now, ttl) {
+        AuthorizeDecision::Deny { error, state, .. } => {
+            assert_eq!(error.code(), &OAuthErrorCode::LoginRequired);
+            assert_eq!(state.as_ref().map(State::as_str), Some("st-abc"));
+        }
+        other => panic!("expected Deny, got {other:?}"),
+    }
+}
+
+#[test]
+fn oidc_unauthenticated_authorize_contract() {
+    let now = fixed_now();
+    let ttl = Duration::seconds(DEFAULT_CODE_TTL_SECONDS);
+
+    // no session + default + hook -> delegate to host login UI
+    assert!(matches!(
+        decide_authorization(&authz_request(PromptMode::Default), None, true, now, ttl),
+        AuthorizeDecision::RequireLogin
+    ));
+
+    // no session + default + no hook -> login_required via validated redirect, state echoed
+    match decide_authorization(&authz_request(PromptMode::Default), None, false, now, ttl) {
+        AuthorizeDecision::Deny {
+            error,
+            redirect_uri,
+            state,
+        } => {
+            assert_eq!(error.code(), &OAuthErrorCode::LoginRequired);
+            assert_eq!(redirect_uri.as_str(), "https://app.example/cb");
+            assert_eq!(state.as_ref().map(State::as_str), Some("st-abc"));
+        }
+        other => panic!("expected Deny, got {other:?}"),
+    }
+
+    // no session + prompt=none -> login_required (cannot interact), even with a hook
+    match decide_authorization(&authz_request(PromptMode::None), None, true, now, ttl) {
+        AuthorizeDecision::Deny { error, .. } => {
+            assert_eq!(error.code(), &OAuthErrorCode::LoginRequired);
+        }
+        other => panic!("expected Deny, got {other:?}"),
+    }
+}
+
+#[test]
+fn oidc_token_exchange_failure_ordering() {
+    let now = fixed_now();
+    let future = now + Duration::seconds(60);
+    let conf = confidential_client();
+    let public = public_client();
+
+    // step 1 client auth: confidential wrong/missing secret -> invalid_client
+    assert_eq!(
+        authenticate_client(&conf, Some("wrong")).unwrap_err().code(),
+        &OAuthErrorCode::InvalidClient
+    );
+    assert_eq!(
+        authenticate_client(&conf, None).unwrap_err().code(),
+        &OAuthErrorCode::InvalidClient
+    );
+    assert!(authenticate_client(&conf, Some("s3cr3t-value-123")).is_ok());
+    // public client: no secret ok; secret present -> invalid_client
+    assert!(authenticate_client(&public, None).is_ok());
+    assert_eq!(
+        authenticate_client(&public, Some("x")).unwrap_err().code(),
+        &OAuthErrorCode::InvalidClient
+    );
+
+    let req = token_request(Some(RFC7636_VERIFIER), None);
+
+    // step 2 missing code -> invalid_grant
+    assert_eq!(
+        decide_token_grant(&req, &public, None, now).unwrap_err().code(),
+        &OAuthErrorCode::InvalidGrant
+    );
+
+    // step 3 redirect mismatch -> invalid_grant (before PKCE)
+    let mut wrong_redirect = code_record(future);
+    wrong_redirect.redirect_uri = RedirectUri::parse("https://app.example/other").unwrap();
+    assert_eq!(
+        decide_token_grant(&req, &public, Some(&wrong_redirect), now)
+            .unwrap_err()
+            .code(),
+        &OAuthErrorCode::InvalidGrant
+    );
+
+    // step 4 PKCE mismatch -> invalid_grant
+    let bad = token_request(Some(&"b".repeat(50)), None);
+    assert_eq!(
+        decide_token_grant(&bad, &public, Some(&code_record(future)), now)
+            .unwrap_err()
+            .code(),
+        &OAuthErrorCode::InvalidGrant
+    );
+
+    // all checks pass -> a token grant
+    let grant = decide_token_grant(&req, &public, Some(&code_record(future)), now).unwrap();
+    assert_eq!(grant.subject.as_str(), "user-1");
+    assert!(grant.scope.contains(Scope::OPENID));
+}
+
+#[test]
+fn oidc_id_token_claims_contract() {
+    let now = fixed_now();
+    let ttl = Duration::seconds(DEFAULT_ACCESS_TOKEN_TTL_SECONDS);
+    let issuer = Issuer::parse("https://idp.example").unwrap();
+    let client_id = ClientId::parse("rp-1").unwrap();
+    let grant = TokenGrant {
+        client_id: client_id.clone(),
+        subject: SubjectId::parse("user-42").unwrap(),
+        scope: ScopeSet::parse("openid profile email").unwrap(),
+        nonce: Some(Nonce::new("nonce-xyz".to_string())),
+        auth_time: now - Duration::seconds(30),
+    };
+    let source = SubjectClaims {
+        name: Some("Grace".to_string()),
+        email: Some("g@example.com".to_string()),
+        email_verified: Some(true),
+    };
+
+    let claims = build_id_token_claims(&issuer, &client_id, &grant, &source, now, ttl);
+    assert_eq!(claims.iss, "https://idp.example");
+    assert_eq!(claims.sub, "user-42");
+    assert_eq!(claims.aud, "rp-1");
+    assert_eq!(claims.iat, now.timestamp());
+    assert_eq!(claims.exp, (now + ttl).timestamp());
+    assert_eq!(claims.auth_time, (now - Duration::seconds(30)).timestamp());
+    assert_eq!(claims.nonce.as_deref(), Some("nonce-xyz"));
+    assert_eq!(claims.name.as_deref(), Some("Grace"));
+    assert_eq!(claims.email.as_deref(), Some("g@example.com"));
+    assert_eq!(claims.email_verified, Some(true));
+
+    // openid-only -> profile/email claims omitted
+    let minimal = TokenGrant {
+        scope: ScopeSet::parse("openid").unwrap(),
+        ..grant.clone()
+    };
+    let claims = build_id_token_claims(&issuer, &client_id, &minimal, &source, now, ttl);
+    assert!(claims.name.is_none());
+    assert!(claims.email.is_none());
+}
+
+#[tokio::test]
+async fn oidc_jws_assembly_owns_serialization() {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let payload = br#"{"sub":"user-1","iss":"https://idp.example"}"#;
+    let signer = FakeSigner {
+        kid: KeyId::new("key-1"),
+        alg: SigningAlg::Es256,
+        captured: std::sync::Mutex::new(None),
+    };
+
+    let jws = sign_id_token(payload, &signer).await.unwrap();
+
+    // the signer only ever saw the encoded signing_input = header "." payload
+    let signing_input = signer
+        .captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("signer was called");
+    let parts: Vec<&str> = signing_input.split('.').collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(URL_SAFE_NO_PAD.decode(parts[1]).unwrap(), payload);
+    let header: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+    assert_eq!(header.get("alg").and_then(Value::as_str), Some("ES256"));
+    assert_eq!(header.get("kid").and_then(Value::as_str), Some("key-1"));
+    assert_eq!(header.get("typ").and_then(Value::as_str), Some("JWT"));
+
+    // the core assembled the compact JWS = signing_input "." base64url(signature)
+    let expected_sig = URL_SAFE_NO_PAD.encode([0xABu8; 64]);
+    assert_eq!(jws, format!("{signing_input}.{expected_sig}"));
+    // `alg: none` is unrepresentable — SigningAlg has only Es256/Rs256.
+}
+
+#[test]
+fn oidc_access_token_entropy_and_hash_at_rest() {
+    let (token_a, hash_a) = generate_access_token(&FakeRandom(7)).unwrap();
+    let (token_b, _hash_b) = generate_access_token(&FakeRandom(9)).unwrap();
+
+    // the token is produced from SecureRandom: different entropy -> different token
+    assert_ne!(token_a.as_str(), token_b.as_str());
+    // the stored value is a hash, never the raw token
+    assert_ne!(token_a.as_str(), hash_a.as_str());
+    // the stored hash equals the hash of the issued token (userinfo lookup path)
+    assert_eq!(hash_access_token(&token_a).as_str(), hash_a.as_str());
+}
+
+#[test]
+fn oidc_token_and_code_ttls() {
+    let now = fixed_now();
+
+    assert_eq!(DEFAULT_CODE_TTL_SECONDS, 60);
+    assert_eq!(DEFAULT_ACCESS_TOKEN_TTL_SECONDS, 600);
+
+    // expiry computed from the injected clock
+    assert_eq!(
+        expires_at(now, Duration::seconds(60)),
+        now + Duration::seconds(60)
+    );
+    assert!(is_expired(now, now - Duration::seconds(1)));
+    assert!(!is_expired(now, now + Duration::seconds(1)));
+
+    // an expired authorization code fails token exchange with invalid_grant,
+    // expiry decided by the injected clock rather than database NOW()
+    let expired = code_record(now - Duration::seconds(1));
+    let req = token_request(Some(RFC7636_VERIFIER), None);
+    assert_eq!(
+        decide_token_grant(&req, &public_client(), Some(&expired), now)
+            .unwrap_err()
+            .code(),
+        &OAuthErrorCode::InvalidGrant
+    );
+}

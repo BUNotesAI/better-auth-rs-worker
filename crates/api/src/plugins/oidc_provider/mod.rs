@@ -13,9 +13,13 @@
 //! or config types.
 
 pub mod claims;
+pub mod decide;
 pub mod discovery;
 pub mod error;
+pub mod jws;
+pub mod requests;
 pub mod rules;
+pub mod token;
 
 #[cfg(test)]
 mod tests;
