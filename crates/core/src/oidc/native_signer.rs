@@ -122,4 +122,68 @@ mod tests {
         .unwrap();
         assert!(verified);
     }
+
+    #[tokio::test]
+    async fn oidc_jwks_verify_smoke_native() {
+        use crate::capabilities::Jwk;
+
+        // The published JWK (x/y) for the test key. An OIDC relying party uses
+        // exactly this JWKS output to verify issued id_tokens, so this is the
+        // end-to-end contract: what the signer signs must verify under the
+        // *published* JWK, not just the raw key. (Worker/WebCrypto arm carried
+        // forward to wrangler/CI; the port is identical.)
+        const JWK_X: &str = "M3zyJ3XCD5evkQoneaslw6xNDdSLa16gL_LmY8gD1eQ";
+        const JWK_Y: &str = "U5cWhs_62iaxY3IUjlNetsLqdfB8g8iQrG9V2cepEEg";
+
+        let signer = NativeJwtSigner::from_pem(
+            KeyId::new("test-key-1"),
+            SigningAlg::Es256,
+            TEST_EC_PKCS8_PEM.as_bytes(),
+        )
+        .unwrap();
+        let (kid, alg) = signer.active_key().unwrap();
+
+        let jwks = StaticJwksProvider::new(JwkSet {
+            keys: vec![Jwk::Ec {
+                use_: "sig".to_string(),
+                kid: kid.as_str().to_string(),
+                alg: alg.as_str().to_string(),
+                crv: "P-256".to_string(),
+                x: JWK_X.to_string(),
+                y: JWK_Y.to_string(),
+            }],
+        });
+
+        let signing_input =
+            b"eyJhbGciOiJFUzI1NiIsImtpZCI6InRlc3Qta2V5LTEiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiJ1c2VyLTEifQ";
+        let signature = signer.sign(&kid, alg, signing_input).await.unwrap();
+
+        // verify using the PUBLISHED JWK components (x/y), not the raw PEM key.
+        let published = jwks.jwks().unwrap();
+        let Jwk::Ec { x, y, .. } = &published.keys[0] else {
+            panic!("expected an EC jwk");
+        };
+        let decoding = DecodingKey::from_ec_components(x, y).unwrap();
+        let verified = jsonwebtoken::crypto::verify(
+            &URL_SAFE_NO_PAD.encode(&signature),
+            signing_input,
+            &decoding,
+            Algorithm::ES256,
+        )
+        .unwrap();
+        assert!(
+            verified,
+            "issued id_token signature must verify under the published JWKS"
+        );
+
+        // a different message must not verify under the same JWK + signature.
+        let tampered = jsonwebtoken::crypto::verify(
+            &URL_SAFE_NO_PAD.encode(&signature),
+            b"tampered.payload",
+            &decoding,
+            Algorithm::ES256,
+        )
+        .unwrap();
+        assert!(!tampered, "a tampered token must not verify");
+    }
 }
