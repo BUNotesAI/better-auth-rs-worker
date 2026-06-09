@@ -162,6 +162,12 @@ pub mod sqlx_adapter {
             }
         }
 
+        /// Returns the underlying connection pool, e.g. to apply OIDC migrations
+        /// or seed registered clients in tests and embedded setups.
+        pub fn pool(&self) -> &PgPool {
+            &self.pool
+        }
+
         pub async fn test_connection(&self) -> Result<(), sqlx::Error> {
             sqlx::query("SELECT 1").execute(&self.pool).await?;
             Ok(())
@@ -303,6 +309,7 @@ pub mod sqlx_adapter {
             Ok(user)
         }
 
+        #[allow(clippy::too_many_lines)] // Exception: pre-existing oversized SqlxAdapter fn, refactor outside task_6f08dbb6 scope.
         async fn update_user(&self, id: &str, update: UpdateUser) -> AuthResult<U> {
             let mut query = sqlx::QueryBuilder::new(format!(
                 "UPDATE {} SET {} = NOW()",
@@ -411,6 +418,7 @@ pub mod sqlx_adapter {
             Ok(())
         }
 
+        #[allow(clippy::too_many_lines)] // Exception: pre-existing oversized SqlxAdapter fn, refactor outside task_6f08dbb6 scope.
         async fn list_users(&self, params: ListUsersParams) -> AuthResult<(Vec<U>, usize)> {
             let limit = params.limit.unwrap_or(100) as i64;
             let offset = params.offset.unwrap_or(0) as i64;
@@ -1848,6 +1856,275 @@ pub mod sqlx_adapter {
             );
             sqlx::query(&sql).bind(id).execute(&self.pool).await?;
             Ok(())
+        }
+    }
+
+    // -- OIDC provider store (feature = "oidc-provider") --
+
+    #[cfg(feature = "oidc-provider")]
+    use crate::oidc::{
+        AccessTokenHash, AccessTokenOps, AccessTokenRecord, AuthorizationCode, AuthorizationCodeOps,
+        AuthorizationCodeRecord, ClientId, ClientType, CodeChallenge, CodeChallengeMethod,
+        GrantType, NewAccessToken, NewAuthorizationCode, Nonce, OAuthClient, OAuthClientOps,
+        RedirectUri, ScopeSet, SubjectId, TokenEndpointAuthMethod,
+    };
+
+    #[cfg(feature = "oidc-provider")]
+    #[derive(sqlx::FromRow)]
+    struct OidcClientRow {
+        client_id: String,
+        client_type: String,
+        client_secret_hash: Option<String>,
+        redirect_uris: sqlx::types::Json<Vec<String>>,
+        allowed_scopes: String,
+        allowed_grant_types: sqlx::types::Json<Vec<String>>,
+        token_endpoint_auth_method: String,
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    impl OidcClientRow {
+        fn into_client(self) -> AuthResult<OAuthClient> {
+            Ok(OAuthClient {
+                client_id: ClientId::parse(self.client_id)?,
+                client_type: ClientType::parse(&self.client_type)?,
+                redirect_uris: self
+                    .redirect_uris
+                    .0
+                    .into_iter()
+                    .map(RedirectUri::parse)
+                    .collect::<AuthResult<Vec<_>>>()?,
+                allowed_scopes: ScopeSet::parse(&self.allowed_scopes)?,
+                allowed_grant_types: self
+                    .allowed_grant_types
+                    .0
+                    .iter()
+                    .map(|g| GrantType::parse(g))
+                    .collect::<AuthResult<Vec<_>>>()?,
+                secret_hash: self.client_secret_hash,
+                token_endpoint_auth_method: TokenEndpointAuthMethod::parse(
+                    &self.token_endpoint_auth_method,
+                )?,
+            })
+        }
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    #[derive(sqlx::FromRow)]
+    struct OidcCodeRow {
+        code: String,
+        client_id: String,
+        user_id: String,
+        redirect_uri: String,
+        scope: String,
+        code_challenge: String,
+        code_challenge_method: String,
+        nonce: Option<String>,
+        auth_time: chrono::DateTime<chrono::Utc>,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    impl OidcCodeRow {
+        fn into_record(self) -> AuthResult<AuthorizationCodeRecord> {
+            Ok(AuthorizationCodeRecord {
+                code: AuthorizationCode::from_raw(self.code),
+                client_id: ClientId::parse(self.client_id)?,
+                subject: SubjectId::parse(self.user_id)?,
+                redirect_uri: RedirectUri::parse(self.redirect_uri)?,
+                scope: ScopeSet::parse(&self.scope)?,
+                code_challenge: CodeChallenge::parse(self.code_challenge)?,
+                code_challenge_method: CodeChallengeMethod::parse(&self.code_challenge_method)?,
+                nonce: self.nonce.map(Nonce::new),
+                auth_time: self.auth_time,
+                expires_at: self.expires_at,
+            })
+        }
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    #[derive(sqlx::FromRow)]
+    struct OidcAccessTokenRow {
+        token_hash: String,
+        client_id: String,
+        user_id: String,
+        scope: String,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    impl OidcAccessTokenRow {
+        fn into_record(self) -> AuthResult<AccessTokenRecord> {
+            Ok(AccessTokenRecord {
+                token_hash: AccessTokenHash::from_hash(self.token_hash),
+                client_id: ClientId::parse(self.client_id)?,
+                subject: SubjectId::parse(self.user_id)?,
+                scope: ScopeSet::parse(&self.scope)?,
+                expires_at: self.expires_at,
+                created_at: self.created_at,
+            })
+        }
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
+    impl<U, S, A, O, M, I, V, TF, AK, PK> OAuthClientOps
+        for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
+    where
+        U: AuthUser + AuthUserMeta + SqlxEntity,
+        S: AuthSession + AuthSessionMeta + SqlxEntity,
+        A: AuthAccount + AuthAccountMeta + SqlxEntity,
+        O: AuthOrganization + AuthOrganizationMeta + SqlxEntity,
+        M: AuthMember + AuthMemberMeta + SqlxEntity,
+        I: AuthInvitation + AuthInvitationMeta + SqlxEntity,
+        V: AuthVerification + AuthVerificationMeta + SqlxEntity,
+        TF: AuthTwoFactor + AuthTwoFactorMeta + SqlxEntity,
+        AK: AuthApiKey + AuthApiKeyMeta + SqlxEntity,
+        PK: AuthPasskey + AuthPasskeyMeta + SqlxEntity,
+    {
+        async fn get_client(&self, id: &ClientId) -> AuthResult<Option<OAuthClient>> {
+            let row = sqlx::query_as::<_, OidcClientRow>(
+                "SELECT client_id, client_type, client_secret_hash, redirect_uris, \
+                 allowed_scopes, allowed_grant_types, token_endpoint_auth_method \
+                 FROM oauth_clients WHERE client_id = $1",
+            )
+            .bind(id.as_str())
+            .fetch_optional(&self.pool)
+            .await?;
+            row.map(OidcClientRow::into_client).transpose()
+        }
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
+    impl<U, S, A, O, M, I, V, TF, AK, PK> AuthorizationCodeOps
+        for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
+    where
+        U: AuthUser + AuthUserMeta + SqlxEntity,
+        S: AuthSession + AuthSessionMeta + SqlxEntity,
+        A: AuthAccount + AuthAccountMeta + SqlxEntity,
+        O: AuthOrganization + AuthOrganizationMeta + SqlxEntity,
+        M: AuthMember + AuthMemberMeta + SqlxEntity,
+        I: AuthInvitation + AuthInvitationMeta + SqlxEntity,
+        V: AuthVerification + AuthVerificationMeta + SqlxEntity,
+        TF: AuthTwoFactor + AuthTwoFactorMeta + SqlxEntity,
+        AK: AuthApiKey + AuthApiKeyMeta + SqlxEntity,
+        PK: AuthPasskey + AuthPasskeyMeta + SqlxEntity,
+    {
+        async fn create_authorization_code(
+            &self,
+            input: NewAuthorizationCode,
+        ) -> AuthResult<()> {
+            sqlx::query(
+                "INSERT INTO oidc_authorization_codes (code, client_id, user_id, redirect_uri, \
+                 scope, code_challenge, code_challenge_method, nonce, auth_time, expires_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            )
+            .bind(input.code.as_str())
+            .bind(input.client_id.as_str())
+            .bind(input.subject.as_str())
+            .bind(input.redirect_uri.as_str())
+            .bind(input.scope.as_space_delimited())
+            .bind(input.code_challenge.as_str())
+            .bind(input.code_challenge_method.as_str())
+            .bind(input.nonce.as_ref().map(Nonce::as_str))
+            .bind(input.auth_time)
+            .bind(input.expires_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(())
+        }
+
+        async fn consume_authorization_code(
+            &self,
+            code: &AuthorizationCode,
+            now: chrono::DateTime<chrono::Utc>,
+        ) -> AuthResult<Option<AuthorizationCodeRecord>> {
+            // Single-statement atomic consume: only an unexpired code is deleted
+            // and returned, so two racing redemptions cannot both win. Expiry uses
+            // the injected clock instant, not database NOW().
+            let row = sqlx::query_as::<_, OidcCodeRow>(
+                "DELETE FROM oidc_authorization_codes WHERE code = $1 AND expires_at > $2 \
+                 RETURNING code, client_id, user_id, redirect_uri, scope, code_challenge, \
+                 code_challenge_method, nonce, auth_time, expires_at",
+            )
+            .bind(code.as_str())
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await?;
+            row.map(OidcCodeRow::into_record).transpose()
+        }
+
+        async fn delete_expired_authorization_codes(
+            &self,
+            now: chrono::DateTime<chrono::Utc>,
+        ) -> AuthResult<usize> {
+            let result = sqlx::query("DELETE FROM oidc_authorization_codes WHERE expires_at <= $1")
+                .bind(now)
+                .execute(&self.pool)
+                .await?;
+            Ok(result.rows_affected() as usize)
+        }
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    #[cfg_attr(feature = "local-futures", async_trait(?Send))]
+    #[cfg_attr(not(feature = "local-futures"), async_trait)]
+    impl<U, S, A, O, M, I, V, TF, AK, PK> AccessTokenOps
+        for SqlxAdapter<U, S, A, O, M, I, V, TF, AK, PK>
+    where
+        U: AuthUser + AuthUserMeta + SqlxEntity,
+        S: AuthSession + AuthSessionMeta + SqlxEntity,
+        A: AuthAccount + AuthAccountMeta + SqlxEntity,
+        O: AuthOrganization + AuthOrganizationMeta + SqlxEntity,
+        M: AuthMember + AuthMemberMeta + SqlxEntity,
+        I: AuthInvitation + AuthInvitationMeta + SqlxEntity,
+        V: AuthVerification + AuthVerificationMeta + SqlxEntity,
+        TF: AuthTwoFactor + AuthTwoFactorMeta + SqlxEntity,
+        AK: AuthApiKey + AuthApiKeyMeta + SqlxEntity,
+        PK: AuthPasskey + AuthPasskeyMeta + SqlxEntity,
+    {
+        async fn create_access_token(&self, input: NewAccessToken) -> AuthResult<()> {
+            sqlx::query(
+                "INSERT INTO oidc_access_tokens (token_hash, client_id, user_id, scope, \
+                 expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(input.token_hash.as_str())
+            .bind(input.client_id.as_str())
+            .bind(input.subject.as_str())
+            .bind(input.scope.as_space_delimited())
+            .bind(input.expires_at)
+            .bind(input.created_at)
+            .execute(&self.pool)
+            .await?;
+            Ok(())
+        }
+
+        async fn get_access_token_by_hash(
+            &self,
+            hash: &AccessTokenHash,
+        ) -> AuthResult<Option<AccessTokenRecord>> {
+            let row = sqlx::query_as::<_, OidcAccessTokenRow>(
+                "SELECT token_hash, client_id, user_id, scope, expires_at, created_at \
+                 FROM oidc_access_tokens WHERE token_hash = $1",
+            )
+            .bind(hash.as_str())
+            .fetch_optional(&self.pool)
+            .await?;
+            row.map(OidcAccessTokenRow::into_record).transpose()
+        }
+
+        async fn delete_expired_access_tokens(
+            &self,
+            now: chrono::DateTime<chrono::Utc>,
+        ) -> AuthResult<usize> {
+            let result = sqlx::query("DELETE FROM oidc_access_tokens WHERE expires_at <= $1")
+                .bind(now)
+                .execute(&self.pool)
+                .await?;
+            Ok(result.rows_affected() as usize)
         }
     }
 }

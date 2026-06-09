@@ -8,8 +8,12 @@
 //! with `Unavailable*` defaults, like the other effect ports.
 
 pub mod model;
+#[cfg(feature = "jwt")]
+pub mod native_signer;
 pub mod store;
 
+#[cfg(feature = "jwt")]
+pub use native_signer::{NativeJwtSigner, StaticJwksProvider};
 pub use model::{
     AccessToken, AccessTokenHash, AccessTokenRecord, AuthorizationCode, AuthorizationCodeRecord,
     ClientId, ClientType, CodeChallenge, CodeChallengeMethod, CodeVerifier, GrantType, Issuer,

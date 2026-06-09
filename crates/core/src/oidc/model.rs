@@ -295,6 +295,14 @@ impl GrantType {
             Self::AuthorizationCode => "authorization_code",
         }
     }
+
+    /// Parses a stored grant type string.
+    pub fn parse(raw: &str) -> AuthResult<Self> {
+        match raw {
+            "authorization_code" => Ok(Self::AuthorizationCode),
+            other => Err(AuthError::validation(format!("unknown grant_type: {other}"))),
+        }
+    }
 }
 
 /// Client confidentiality classification.
@@ -306,6 +314,25 @@ pub enum ClientType {
     Confidential,
 }
 
+impl ClientType {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Public => "public",
+            Self::Confidential => "confidential",
+        }
+    }
+
+    /// Parses a stored client type string.
+    pub fn parse(raw: &str) -> AuthResult<Self> {
+        match raw {
+            "public" => Ok(Self::Public),
+            "confidential" => Ok(Self::Confidential),
+            other => Err(AuthError::validation(format!("unknown client_type: {other}"))),
+        }
+    }
+}
+
 /// Token endpoint client authentication method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TokenEndpointAuthMethod {
@@ -315,6 +342,29 @@ pub enum TokenEndpointAuthMethod {
     ClientSecretPost,
     /// No client authentication (public clients).
     None,
+}
+
+impl TokenEndpointAuthMethod {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::ClientSecretBasic => "client_secret_basic",
+            Self::ClientSecretPost => "client_secret_post",
+            Self::None => "none",
+        }
+    }
+
+    /// Parses a stored token endpoint auth method string.
+    pub fn parse(raw: &str) -> AuthResult<Self> {
+        match raw {
+            "client_secret_basic" => Ok(Self::ClientSecretBasic),
+            "client_secret_post" => Ok(Self::ClientSecretPost),
+            "none" => Ok(Self::None),
+            other => Err(AuthError::validation(format!(
+                "unknown token_endpoint_auth_method: {other}"
+            ))),
+        }
+    }
 }
 
 /// Issued opaque access token (the secret returned to the client).
