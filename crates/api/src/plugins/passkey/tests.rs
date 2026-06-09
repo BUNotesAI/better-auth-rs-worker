@@ -136,6 +136,7 @@ async fn test_verify_registration_consumes_exact_challenge_once() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Exception: pre-existing oversized test, refactor outside task_6f08dbb6 scope.
 async fn test_verify_authentication_checks_type_origin_and_prevents_replay() {
     let plugin = PasskeyPlugin::new().allow_insecure_unverified_assertion(true);
     let (ctx, user, _session) = test_helpers::create_test_context_with_user(

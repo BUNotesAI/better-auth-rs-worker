@@ -27,18 +27,13 @@ impl WorkerDeferredCapability {
 }
 
 /// Password hashing strategy selected for Worker production config.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum WorkerPasswordHasherPolicy {
+    #[default]
     Missing,
     Injected,
     WorkerValidatedBuiltin { benchmark_evidence: String },
-}
-
-impl Default for WorkerPasswordHasherPolicy {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 /// Worker v1 config accepted by the adapter boundary.
