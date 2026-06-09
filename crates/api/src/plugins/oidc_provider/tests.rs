@@ -179,7 +179,9 @@ use super::decide::{
     AuthorizeDecision, TokenGrant, authenticate_client, decide_authorization, decide_token_grant,
 };
 use super::jws::sign_id_token;
-use super::requests::{AuthenticatedSubject, AuthorizationRequest, PromptMode, TokenRequest};
+use super::requests::{
+    AuthenticatedSubject, AuthorizationRequest, PromptMode, TokenRequest, parse_prompt,
+};
 use super::token::{
     DEFAULT_ACCESS_TOKEN_TTL_SECONDS, DEFAULT_CODE_TTL_SECONDS, expires_at, generate_access_token,
     hash_access_token, hash_client_secret, is_expired,
@@ -311,6 +313,15 @@ fn oidc_authorize_prompt_consent_matrix() {
         }
         other => panic!("expected Deny, got {other:?}"),
     }
+
+    // raw prompt parsing: known values map; an unsupported value is invalid_request
+    assert_eq!(parse_prompt(None).unwrap(), PromptMode::Default);
+    assert_eq!(parse_prompt(Some("none")).unwrap(), PromptMode::None);
+    assert_eq!(parse_prompt(Some("login")).unwrap(), PromptMode::Login);
+    assert_eq!(
+        parse_prompt(Some("consent")).unwrap_err().code(),
+        &OAuthErrorCode::InvalidRequest
+    );
 }
 
 #[test]
@@ -379,6 +390,17 @@ fn oidc_token_exchange_failure_ordering() {
         &OAuthErrorCode::InvalidGrant
     );
 
+    // step 2b code issued to a different client -> invalid_grant (ordered before
+    // redirect/PKCE; protects the grant->client binding)
+    let mut wrong_client = code_record(future);
+    wrong_client.client_id = ClientId::parse("a-different-client").unwrap();
+    assert_eq!(
+        decide_token_grant(&req, &public, Some(&wrong_client), now)
+            .unwrap_err()
+            .code(),
+        &OAuthErrorCode::InvalidGrant
+    );
+
     // step 3 redirect mismatch -> invalid_grant (before PKCE)
     let mut wrong_redirect = code_record(future);
     wrong_redirect.redirect_uri = RedirectUri::parse("https://app.example/other").unwrap();
@@ -423,7 +445,7 @@ fn oidc_id_token_claims_contract() {
         email_verified: Some(true),
     };
 
-    let claims = build_id_token_claims(&issuer, &client_id, &grant, &source, now, ttl);
+    let claims = build_id_token_claims(&issuer, &grant, &source, now, ttl);
     assert_eq!(claims.iss, "https://idp.example");
     assert_eq!(claims.sub, "user-42");
     assert_eq!(claims.aud, "rp-1");
@@ -440,7 +462,7 @@ fn oidc_id_token_claims_contract() {
         scope: ScopeSet::parse("openid").unwrap(),
         ..grant.clone()
     };
-    let claims = build_id_token_claims(&issuer, &client_id, &minimal, &source, now, ttl);
+    let claims = build_id_token_claims(&issuer, &minimal, &source, now, ttl);
     assert!(claims.name.is_none());
     assert!(claims.email.is_none());
 }

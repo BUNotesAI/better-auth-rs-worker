@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use better_auth_core::{ClientId, Issuer, Scope, ScopeSet};
+use better_auth_core::{Issuer, Scope, ScopeSet};
 
 use super::decide::TokenGrant;
 
@@ -64,13 +64,13 @@ pub struct IdTokenClaims {
 
 /// Builds the id_token claims (pure).
 ///
-/// `iss` is the configured issuer, `sub` the subject, `aud` the client id,
+/// `iss` is the configured issuer, `sub` the subject, `aud` the grant's client id,
 /// `exp = now + ttl`, `iat = now`, `auth_time` from the session, `nonce` echoed
 /// from the request, and profile/email claims included only for granted scopes.
+/// `aud` comes from `grant.client_id` so it cannot diverge from the grant binding.
 #[must_use]
 pub fn build_id_token_claims(
     issuer: &Issuer,
-    client_id: &ClientId,
     grant: &TokenGrant,
     source: &SubjectClaims,
     now: DateTime<Utc>,
@@ -80,7 +80,7 @@ pub fn build_id_token_claims(
     IdTokenClaims {
         iss: issuer.as_str().to_string(),
         sub: grant.subject.as_str().to_string(),
-        aud: client_id.as_str().to_string(),
+        aud: grant.client_id.as_str().to_string(),
         exp: (now + ttl).timestamp(),
         iat: now.timestamp(),
         auth_time: grant.auth_time.timestamp(),
