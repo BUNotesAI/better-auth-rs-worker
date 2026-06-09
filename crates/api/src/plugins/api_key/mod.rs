@@ -566,6 +566,7 @@ impl ApiKeyPlugin {
     ///
     /// Returns `Ok(ApiKeyView)` on success, or `Err(ApiKeyValidationError)` with
     /// a structured error code (no fragile string matching needed).
+    #[allow(clippy::too_many_lines)] // Exception: pre-existing oversized function, refactor outside task_6f08dbb6 scope.
     async fn validate_api_key<DB: DatabaseAdapter>(
         &self,
         ctx: &AuthContext<DB>,

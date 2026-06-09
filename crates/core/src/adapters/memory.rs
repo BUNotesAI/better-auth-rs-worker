@@ -61,6 +61,12 @@ pub struct MemoryDatabaseAdapter<
     api_keys: Arc<Mutex<HashMap<String, ApiKey>>>,
     passkeys: Arc<Mutex<HashMap<String, P>>>,
     passkey_credential_index: Arc<Mutex<HashMap<String, String>>>,
+    #[cfg(feature = "oidc-provider")]
+    oidc_clients: Arc<Mutex<HashMap<String, crate::oidc::OAuthClient>>>,
+    #[cfg(feature = "oidc-provider")]
+    oidc_codes: Arc<Mutex<HashMap<String, crate::oidc::AuthorizationCodeRecord>>>,
+    #[cfg(feature = "oidc-provider")]
+    oidc_access_tokens: Arc<Mutex<HashMap<String, crate::oidc::AccessTokenRecord>>>,
 }
 
 /// Constructor for the default (built-in) entity types.
@@ -88,6 +94,12 @@ impl<U, S, A, O, M, I, V, P> Default for MemoryDatabaseAdapter<U, S, A, O, M, I,
             api_keys: Arc::new(Mutex::new(HashMap::new())),
             passkeys: Arc::new(Mutex::new(HashMap::new())),
             passkey_credential_index: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "oidc-provider")]
+            oidc_clients: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "oidc-provider")]
+            oidc_codes: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "oidc-provider")]
+            oidc_access_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1070,5 +1082,148 @@ where
             credential_index.remove(passkey.credential_id());
         }
         Ok(())
+    }
+}
+
+// -- OIDC provider store (feature = "oidc-provider") --
+
+#[cfg(feature = "oidc-provider")]
+use crate::oidc::{
+    AccessTokenHash, AccessTokenOps, AccessTokenRecord, AuthorizationCode, AuthorizationCodeOps,
+    AuthorizationCodeRecord, ClientId, NewAccessToken, NewAuthorizationCode, OAuthClient,
+    OAuthClientOps,
+};
+
+#[cfg(feature = "oidc-provider")]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl<U, S, A, O, M, I, V, P> OAuthClientOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
+where
+    U: MemoryUser,
+    S: MemorySession,
+    A: MemoryAccount,
+    O: MemoryOrganization,
+    M: MemoryMember,
+    I: MemoryInvitation,
+    V: MemoryVerification,
+    P: MemoryPasskey,
+{
+    async fn get_client(&self, id: &ClientId) -> AuthResult<Option<OAuthClient>> {
+        Ok(self.oidc_clients.lock().unwrap().get(id.as_str()).cloned())
+    }
+}
+
+#[cfg(feature = "oidc-provider")]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl<U, S, A, O, M, I, V, P> AuthorizationCodeOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
+where
+    U: MemoryUser,
+    S: MemorySession,
+    A: MemoryAccount,
+    O: MemoryOrganization,
+    M: MemoryMember,
+    I: MemoryInvitation,
+    V: MemoryVerification,
+    P: MemoryPasskey,
+{
+    async fn create_authorization_code(&self, input: NewAuthorizationCode) -> AuthResult<()> {
+        let key = input.code.as_str().to_string();
+        let record = AuthorizationCodeRecord {
+            code: input.code,
+            client_id: input.client_id,
+            subject: input.subject,
+            redirect_uri: input.redirect_uri,
+            scope: input.scope,
+            code_challenge: input.code_challenge,
+            code_challenge_method: input.code_challenge_method,
+            nonce: input.nonce,
+            auth_time: input.auth_time,
+            expires_at: input.expires_at,
+        };
+        self.oidc_codes.lock().unwrap().insert(key, record);
+        Ok(())
+    }
+
+    async fn consume_authorization_code(
+        &self,
+        code: &AuthorizationCode,
+        now: DateTime<Utc>,
+    ) -> AuthResult<Option<AuthorizationCodeRecord>> {
+        let mut codes = self.oidc_codes.lock().unwrap();
+        // Atomic single-use: remove and return only if present and unexpired,
+        // mirroring the SQL `DELETE ... WHERE expires_at > now RETURNING *`.
+        match codes.get(code.as_str()) {
+            Some(record) if record.expires_at > now => Ok(codes.remove(code.as_str())),
+            _ => Ok(None),
+        }
+    }
+
+    async fn delete_expired_authorization_codes(&self, now: DateTime<Utc>) -> AuthResult<usize> {
+        let mut codes = self.oidc_codes.lock().unwrap();
+        let before = codes.len();
+        codes.retain(|_, record| record.expires_at > now);
+        Ok(before - codes.len())
+    }
+}
+
+#[cfg(feature = "oidc-provider")]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl<U, S, A, O, M, I, V, P> AccessTokenOps for MemoryDatabaseAdapter<U, S, A, O, M, I, V, P>
+where
+    U: MemoryUser,
+    S: MemorySession,
+    A: MemoryAccount,
+    O: MemoryOrganization,
+    M: MemoryMember,
+    I: MemoryInvitation,
+    V: MemoryVerification,
+    P: MemoryPasskey,
+{
+    async fn create_access_token(&self, input: NewAccessToken) -> AuthResult<()> {
+        let key = input.token_hash.as_str().to_string();
+        let record = AccessTokenRecord {
+            token_hash: input.token_hash,
+            client_id: input.client_id,
+            subject: input.subject,
+            scope: input.scope,
+            expires_at: input.expires_at,
+            created_at: input.created_at,
+        };
+        self.oidc_access_tokens.lock().unwrap().insert(key, record);
+        Ok(())
+    }
+
+    async fn get_access_token_by_hash(
+        &self,
+        hash: &AccessTokenHash,
+    ) -> AuthResult<Option<AccessTokenRecord>> {
+        Ok(self
+            .oidc_access_tokens
+            .lock()
+            .unwrap()
+            .get(hash.as_str())
+            .cloned())
+    }
+
+    async fn delete_expired_access_tokens(&self, now: DateTime<Utc>) -> AuthResult<usize> {
+        let mut tokens = self.oidc_access_tokens.lock().unwrap();
+        let before = tokens.len();
+        tokens.retain(|_, record| record.expires_at > now);
+        Ok(before - tokens.len())
+    }
+}
+
+#[cfg(feature = "oidc-provider")]
+impl<U, S, A, O, M, I, V, P> MemoryDatabaseAdapter<U, S, A, O, M, I, V, P> {
+    /// Seeds a registered OAuth client. v1 has no dynamic client registration;
+    /// the host provisions clients out-of-band (config/seed), so this helper
+    /// stands in for that provisioning in tests and embedded setups.
+    pub fn seed_oauth_client(&self, client: OAuthClient) {
+        self.oidc_clients
+            .lock()
+            .unwrap()
+            .insert(client.client_id.as_str().to_string(), client);
     }
 }

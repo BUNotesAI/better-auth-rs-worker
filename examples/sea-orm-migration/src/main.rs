@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! # Sea-ORM Migration Example
 //!
 //! Demonstrates how to use better-auth alongside Sea-ORM in the same application,

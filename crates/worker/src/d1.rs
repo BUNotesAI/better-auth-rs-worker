@@ -19,6 +19,14 @@ use serde_json::Value as JsonValue;
 
 use crate::WorkerRuntimeCapabilities;
 
+#[cfg(feature = "oidc-provider")]
+use better_auth_core::{
+    AccessTokenHash, AccessTokenOps, AccessTokenRecord, AuthorizationCode, AuthorizationCodeOps,
+    AuthorizationCodeRecord, ClientId, ClientType, CodeChallenge, CodeChallengeMethod, GrantType,
+    NewAccessToken, NewAuthorizationCode, Nonce, OAuthClient, OAuthClientOps, RedirectUri, ScopeSet,
+    SubjectId, TokenEndpointAuthMethod,
+};
+
 pub const D1_MIGRATIONS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/d1");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1302,6 +1310,219 @@ fn matches_filter(value: &str, operator: &str, expected: &str) -> bool {
     }
 }
 
+// -- OIDC provider store (feature = "oidc-provider") --
+//
+// D1/SQLite mirror of the native SqlxAdapter OIDC store. Identical column and
+// statement shape, but with `?` placeholders, ms-epoch INTEGER timestamps via
+// `datetime_to_ms`/`ms_to_datetime`, and JSON list columns parsed from TEXT.
+// The atomic single-use code consume uses `DELETE ... RETURNING` with the
+// injected clock instant, matching the Postgres adapter's race-safety guarantee.
+
+#[cfg(feature = "oidc-provider")]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl<D> OAuthClientOps for D1DatabaseAdapter<D>
+where
+    D: D1Database,
+{
+    async fn get_client(&self, id: &ClientId) -> AuthResult<Option<OAuthClient>> {
+        self.execute(
+            D1PreparedStatement::new(
+                "SELECT client_id, client_type, client_secret_hash, redirect_uris, \
+                 allowed_scopes, allowed_grant_types, token_endpoint_auth_method \
+                 FROM oauth_clients WHERE client_id = ? LIMIT 1",
+            )
+            .bind(id.as_str())
+            .first(),
+        )
+        .await?
+        .into_first()
+        .map(row_to_oauth_client)
+        .transpose()
+    }
+}
+
+#[cfg(feature = "oidc-provider")]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl<D> AuthorizationCodeOps for D1DatabaseAdapter<D>
+where
+    D: D1Database,
+{
+    async fn create_authorization_code(&self, input: NewAuthorizationCode) -> AuthResult<()> {
+        // `created_at` is an audit field; native 006 fills it via DEFAULT NOW(),
+        // but D1 must avoid database time functions, so it is set from the
+        // injected runtime clock here (deterministic, no DB time dependency).
+        self.execute(
+            D1PreparedStatement::new(
+                "INSERT INTO oidc_authorization_codes (code, client_id, user_id, redirect_uri, \
+                 scope, code_challenge, code_challenge_method, nonce, auth_time, expires_at, \
+                 created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(input.code.as_str())
+            .bind(input.client_id.as_str())
+            .bind(input.subject.as_str())
+            .bind(input.redirect_uri.as_str())
+            .bind(input.scope.as_space_delimited())
+            .bind(input.code_challenge.as_str())
+            .bind(input.code_challenge_method.as_str())
+            .bind(input.nonce.as_ref().map(Nonce::as_str))
+            .bind(datetime_to_ms(input.auth_time))
+            .bind(datetime_to_ms(input.expires_at))
+            .bind(datetime_to_ms(self.runtime.clock.now()))
+            .run(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn consume_authorization_code(
+        &self,
+        code: &AuthorizationCode,
+        now: DateTime<Utc>,
+    ) -> AuthResult<Option<AuthorizationCodeRecord>> {
+        // Single-statement atomic consume: only an unexpired code is deleted and
+        // returned, so two racing redemptions cannot both win. Expiry compares
+        // against the injected clock instant (ms epoch), not a DB time function.
+        self.execute(
+            D1PreparedStatement::new(
+                "DELETE FROM oidc_authorization_codes WHERE code = ? AND expires_at > ? \
+                 RETURNING code, client_id, user_id, redirect_uri, scope, code_challenge, \
+                 code_challenge_method, nonce, auth_time, expires_at",
+            )
+            .bind(code.as_str())
+            .bind(datetime_to_ms(now))
+            .first(),
+        )
+        .await?
+        .into_first()
+        .map(row_to_authorization_code_record)
+        .transpose()
+    }
+
+    async fn delete_expired_authorization_codes(&self, now: DateTime<Utc>) -> AuthResult<usize> {
+        let result = self
+            .execute(
+                D1PreparedStatement::new(
+                    "DELETE FROM oidc_authorization_codes WHERE expires_at <= ?",
+                )
+                .bind(datetime_to_ms(now))
+                .run(),
+            )
+            .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+#[cfg(feature = "oidc-provider")]
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl<D> AccessTokenOps for D1DatabaseAdapter<D>
+where
+    D: D1Database,
+{
+    async fn create_access_token(&self, input: NewAccessToken) -> AuthResult<()> {
+        self.execute(
+            D1PreparedStatement::new(
+                "INSERT INTO oidc_access_tokens (token_hash, client_id, user_id, scope, \
+                 expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(input.token_hash.as_str())
+            .bind(input.client_id.as_str())
+            .bind(input.subject.as_str())
+            .bind(input.scope.as_space_delimited())
+            .bind(datetime_to_ms(input.expires_at))
+            .bind(datetime_to_ms(input.created_at))
+            .run(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_access_token_by_hash(
+        &self,
+        hash: &AccessTokenHash,
+    ) -> AuthResult<Option<AccessTokenRecord>> {
+        self.execute(
+            D1PreparedStatement::new(
+                "SELECT token_hash, client_id, user_id, scope, expires_at, created_at \
+                 FROM oidc_access_tokens WHERE token_hash = ? LIMIT 1",
+            )
+            .bind(hash.as_str())
+            .first(),
+        )
+        .await?
+        .into_first()
+        .map(row_to_access_token_record)
+        .transpose()
+    }
+
+    async fn delete_expired_access_tokens(&self, now: DateTime<Utc>) -> AuthResult<usize> {
+        let result = self
+            .execute(
+                D1PreparedStatement::new("DELETE FROM oidc_access_tokens WHERE expires_at <= ?")
+                    .bind(datetime_to_ms(now))
+                    .run(),
+            )
+            .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+#[cfg(feature = "oidc-provider")]
+fn row_to_oauth_client(row: D1Row) -> AuthResult<OAuthClient> {
+    let redirect_uris: Vec<String> = serde_json::from_str(&row.required_text("redirect_uris")?)?;
+    let allowed_grant_types: Vec<String> =
+        serde_json::from_str(&row.required_text("allowed_grant_types")?)?;
+    Ok(OAuthClient {
+        client_id: ClientId::parse(row.required_text("client_id")?)?,
+        client_type: ClientType::parse(&row.required_text("client_type")?)?,
+        redirect_uris: redirect_uris
+            .into_iter()
+            .map(RedirectUri::parse)
+            .collect::<AuthResult<Vec<_>>>()?,
+        allowed_scopes: ScopeSet::parse(&row.required_text("allowed_scopes")?)?,
+        allowed_grant_types: allowed_grant_types
+            .iter()
+            .map(|g| GrantType::parse(g))
+            .collect::<AuthResult<Vec<_>>>()?,
+        secret_hash: row.optional_text("client_secret_hash")?,
+        token_endpoint_auth_method: TokenEndpointAuthMethod::parse(
+            &row.required_text("token_endpoint_auth_method")?,
+        )?,
+    })
+}
+
+#[cfg(feature = "oidc-provider")]
+fn row_to_authorization_code_record(row: D1Row) -> AuthResult<AuthorizationCodeRecord> {
+    Ok(AuthorizationCodeRecord {
+        code: AuthorizationCode::from_raw(row.required_text("code")?),
+        client_id: ClientId::parse(row.required_text("client_id")?)?,
+        subject: SubjectId::parse(row.required_text("user_id")?)?,
+        redirect_uri: RedirectUri::parse(row.required_text("redirect_uri")?)?,
+        scope: ScopeSet::parse(&row.required_text("scope")?)?,
+        code_challenge: CodeChallenge::parse(row.required_text("code_challenge")?)?,
+        code_challenge_method: CodeChallengeMethod::parse(
+            &row.required_text("code_challenge_method")?,
+        )?,
+        nonce: row.optional_text("nonce")?.map(Nonce::new),
+        auth_time: ms_to_datetime(row.required_i64("auth_time")?)?,
+        expires_at: ms_to_datetime(row.required_i64("expires_at")?)?,
+    })
+}
+
+#[cfg(feature = "oidc-provider")]
+fn row_to_access_token_record(row: D1Row) -> AuthResult<AccessTokenRecord> {
+    Ok(AccessTokenRecord {
+        token_hash: AccessTokenHash::from_hash(row.required_text("token_hash")?),
+        client_id: ClientId::parse(row.required_text("client_id")?)?,
+        subject: SubjectId::parse(row.required_text("user_id")?)?,
+        scope: ScopeSet::parse(&row.required_text("scope")?)?,
+        expires_at: ms_to_datetime(row.required_i64("expires_at")?)?,
+        created_at: ms_to_datetime(row.required_i64("created_at")?)?,
+    })
+}
+
 fn datetime_to_ms(value: DateTime<Utc>) -> i64 {
     value.timestamp_millis()
 }
@@ -1477,6 +1698,142 @@ mod tests {
     #[cfg(feature = "local-futures")]
     fn shared<T>(value: T) -> std::rc::Rc<T> {
         std::rc::Rc::new(value)
+    }
+
+    #[cfg(feature = "oidc-provider")]
+    #[tokio::test]
+    async fn oidc_d1_store_and_migrations() {
+        // RFC 7636 S256 challenge (43-char base64url), a valid CodeChallenge.
+        const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+        let adapter = D1DatabaseAdapter::new(SqliteD1::migrated(), runtime());
+        let now = Utc.with_ymd_and_hms(2026, 6, 7, 1, 2, 3).unwrap();
+
+        // Seed a registered client (v1 has no dynamic client registration).
+        adapter
+            .database
+            .execute(
+                D1PreparedStatement::new(
+                    "INSERT INTO oauth_clients (client_id, client_type, client_secret_hash, \
+                     redirect_uris, allowed_scopes, allowed_grant_types, \
+                     token_endpoint_auth_method, created_at, updated_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind("public-app")
+                .bind("public")
+                .bind(Option::<String>::None)
+                .bind(r#"["https://app.example/cb"]"#)
+                .bind("openid profile email")
+                .bind(r#"["authorization_code"]"#)
+                .bind("none")
+                .bind(datetime_to_ms(now))
+                .bind(datetime_to_ms(now))
+                .run(),
+            )
+            .await
+            .unwrap();
+
+        // get_client maps the row back through the value-object constructors.
+        let client = adapter
+            .get_client(&ClientId::parse("public-app").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(client.client_type, ClientType::Public);
+        assert_eq!(client.redirect_uris.len(), 1);
+        assert!(client.secret_hash.is_none());
+
+        // create + atomic single-use consume.
+        let code = AuthorizationCode::from_raw("d1-code".to_string());
+        adapter
+            .create_authorization_code(NewAuthorizationCode {
+                code: code.clone(),
+                client_id: ClientId::parse("public-app").unwrap(),
+                subject: SubjectId::parse("user-1").unwrap(),
+                redirect_uri: RedirectUri::parse("https://app.example/cb").unwrap(),
+                scope: ScopeSet::parse("openid profile email").unwrap(),
+                code_challenge: CodeChallenge::parse(CHALLENGE).unwrap(),
+                code_challenge_method: CodeChallengeMethod::S256,
+                nonce: None,
+                auth_time: now,
+                expires_at: now + Duration::seconds(300),
+            })
+            .await
+            .unwrap();
+
+        let consumed = adapter
+            .consume_authorization_code(&code, now)
+            .await
+            .unwrap()
+            .expect("first consume returns the record");
+        assert_eq!(consumed.client_id, ClientId::parse("public-app").unwrap());
+        assert_eq!(consumed.scope, ScopeSet::parse("openid profile email").unwrap());
+        // replay of the same code is rejected (single-use atomic consume).
+        assert!(
+            adapter
+                .consume_authorization_code(&code, now)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // an expired code is never returned by consume (injected-clock expiry).
+        let expired = AuthorizationCode::from_raw("d1-expired".to_string());
+        adapter
+            .create_authorization_code(NewAuthorizationCode {
+                code: expired.clone(),
+                client_id: ClientId::parse("public-app").unwrap(),
+                subject: SubjectId::parse("user-1").unwrap(),
+                redirect_uri: RedirectUri::parse("https://app.example/cb").unwrap(),
+                scope: ScopeSet::parse("openid").unwrap(),
+                code_challenge: CodeChallenge::parse(CHALLENGE).unwrap(),
+                code_challenge_method: CodeChallengeMethod::S256,
+                nonce: None,
+                auth_time: now,
+                expires_at: now - Duration::seconds(1),
+            })
+            .await
+            .unwrap();
+        assert!(
+            adapter
+                .consume_authorization_code(&expired, now)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // access token persisted by hash only; lookup + delete-expired.
+        let hash = AccessTokenHash::from_hash("d1-hash".to_string());
+        adapter
+            .create_access_token(NewAccessToken {
+                token_hash: hash.clone(),
+                client_id: ClientId::parse("public-app").unwrap(),
+                subject: SubjectId::parse("user-1").unwrap(),
+                scope: ScopeSet::parse("openid email").unwrap(),
+                expires_at: now + Duration::seconds(600),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        let token = adapter
+            .get_access_token_by_hash(&hash)
+            .await
+            .unwrap()
+            .expect("token looked up by hash");
+        assert_eq!(token.subject, SubjectId::parse("user-1").unwrap());
+        assert_eq!(token.scope, ScopeSet::parse("openid email").unwrap());
+        assert!(
+            adapter
+                .get_access_token_by_hash(&AccessTokenHash::from_hash("nope".to_string()))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let removed = adapter
+            .delete_expired_access_tokens(now + Duration::seconds(700))
+            .await
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(adapter.get_access_token_by_hash(&hash).await.unwrap().is_none());
     }
 
     #[test]

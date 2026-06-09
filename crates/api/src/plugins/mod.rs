@@ -10,6 +10,8 @@ pub mod email_password;
 pub mod email_verification;
 pub mod helpers;
 pub mod oauth;
+#[cfg(feature = "oidc-provider")]
+pub mod oidc_provider;
 #[cfg(feature = "organization")]
 pub mod organization;
 #[cfg(feature = "passkey")]
@@ -30,6 +32,7 @@ pub(crate) struct StatusResponse {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Exception: pre-existing test_helpers ordering, refactor outside task_6f08dbb6 scope.
 pub(crate) mod test_helpers {
     use better_auth_core::adapters::{MemoryDatabaseAdapter, SessionOps, UserOps};
     use better_auth_core::config::AuthConfig;

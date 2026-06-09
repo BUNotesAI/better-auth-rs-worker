@@ -71,6 +71,7 @@ pub(crate) async fn list_members_core<DB: DatabaseAdapter>(
     Ok(ListMembersResponse { members, total })
 }
 
+#[allow(clippy::too_many_lines)] // Exception: pre-existing oversized function, refactor outside task_6f08dbb6 scope.
 pub(crate) async fn remove_member_core<DB: DatabaseAdapter>(
     body: &RemoveMemberRequest,
     user: &DB::User,

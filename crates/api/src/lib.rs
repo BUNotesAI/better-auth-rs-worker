@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! # Better Auth API
 //!
 //! Plugin implementations for the Better Auth authentication framework.
@@ -21,6 +22,8 @@ pub use plugins::email_password::EmailPasswordPlugin;
 #[cfg(feature = "email-verification")]
 pub use plugins::email_verification::EmailVerificationPlugin;
 pub use plugins::oauth::OAuthPlugin;
+#[cfg(feature = "oidc-provider")]
+pub use plugins::oidc_provider::{LoginRedirectHook, OidcProviderConfig, OidcProviderPlugin};
 #[cfg(feature = "passkey")]
 pub use plugins::passkey::{PasskeyConfig, PasskeyPlugin};
 #[cfg(feature = "password-management")]

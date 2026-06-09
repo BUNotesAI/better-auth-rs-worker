@@ -61,6 +61,7 @@ admin = []
 api-key = ["dep:governor", "dep:nonzero_ext", "dep:rand"]
 device-authorization = ["dep:rand"]
 email-verification = ["dep:uuid"]
+oidc-provider = ["better-auth-core/oidc-provider"]
 native-plugins = [
     "admin",
     "api-key",

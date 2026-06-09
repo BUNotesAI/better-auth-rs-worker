@@ -23,3 +23,4 @@ tokio = { workspace = true }
 default = []
 api-route-tests = ["dep:better-auth-api"]
 local-futures = ["better-auth-core/local-futures", "better-auth-api?/local-futures"]
+oidc-provider = ["better-auth-core/oidc-provider", "better-auth-api?/oidc-provider"]

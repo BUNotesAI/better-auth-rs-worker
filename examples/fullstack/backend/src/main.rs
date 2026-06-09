@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 use axum::{Json, Router, response::IntoResponse, routing::get};
 use better_auth::adapters::MemoryDatabaseAdapter;
 use better_auth::handlers::axum::{AxumIntegration, CurrentSession, OptionalSession};

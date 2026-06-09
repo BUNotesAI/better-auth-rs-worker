@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{AuthError, AuthResult};
 use crate::threading::RuntimeSendSync;
@@ -47,6 +48,16 @@ pub type SharedSessionTokenGenerator = std::rc::Rc<DynSessionTokenGenerator>;
 pub type SharedOAuthHttpClient = std::sync::Arc<DynOAuthHttpClient>;
 #[cfg(feature = "local-futures")]
 pub type SharedOAuthHttpClient = std::rc::Rc<DynOAuthHttpClient>;
+
+#[cfg(not(feature = "local-futures"))]
+pub type SharedJwtSigner = std::sync::Arc<DynJwtSigner>;
+#[cfg(feature = "local-futures")]
+pub type SharedJwtSigner = std::rc::Rc<DynJwtSigner>;
+
+#[cfg(not(feature = "local-futures"))]
+pub type SharedJwksProvider = std::sync::Arc<DynJwksProvider>;
+#[cfg(feature = "local-futures")]
+pub type SharedJwksProvider = std::rc::Rc<DynJwksProvider>;
 
 /// Supplies the current time for portable auth decisions.
 pub trait Clock: RuntimeSendSync + 'static {
@@ -186,6 +197,119 @@ pub trait OAuthHttpClient: RuntimeSendSync + 'static {
     async fn send(&self, request: OAuthHttpRequest) -> AuthResult<OAuthHttpResponse>;
 }
 
+/// Stable key identifier (`kid`) for an OIDC signing key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeyId(String);
+
+impl KeyId {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Signing algorithm allowlist for OIDC id_tokens.
+///
+/// `alg: none` is not representable; the pure core only ever asks the signer for
+/// one of these algorithms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningAlg {
+    /// ECDSA using P-256 and SHA-256 (default).
+    Es256,
+    /// RSASSA-PKCS1-v1_5 using SHA-256.
+    Rs256,
+}
+
+impl SigningAlg {
+    /// The JOSE `alg` value.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Es256 => "ES256",
+            Self::Rs256 => "RS256",
+        }
+    }
+}
+
+/// A single published JSON Web Key (public key material only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kty")]
+pub enum Jwk {
+    /// Elliptic-curve public key (P-256 for ES256).
+    #[serde(rename = "EC")]
+    Ec {
+        #[serde(rename = "use")]
+        use_: String,
+        kid: String,
+        alg: String,
+        crv: String,
+        x: String,
+        y: String,
+    },
+    /// RSA public key (for RS256).
+    #[serde(rename = "RSA")]
+    Rsa {
+        #[serde(rename = "use")]
+        use_: String,
+        kid: String,
+        alg: String,
+        n: String,
+        e: String,
+    },
+}
+
+/// The public JSON Web Key Set published at the JWKS endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct JwkSet {
+    pub keys: Vec<Jwk>,
+}
+
+/// Publishes the public JWKS used to verify issued OIDC id_tokens.
+pub trait JwksProvider: RuntimeSendSync + 'static {
+    /// Returns the public JWK set (public keys only, no private material).
+    fn jwks(&self) -> AuthResult<JwkSet>;
+}
+
+/// Produces raw JWS signatures for OIDC id_tokens.
+///
+/// The pure core owns all JOSE serialization: it builds the protected header,
+/// the payload, the base64url encoding, the `signing_input`, and the final
+/// compact JWS. This port only signs the already-encoded `signing_input` and
+/// returns raw signature bytes; it never sees claims, headers, or serialization.
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+pub trait JwtSigner: RuntimeSendSync + 'static {
+    /// Returns the active signing key id and algorithm for header construction.
+    fn active_key(&self) -> AuthResult<(KeyId, SigningAlg)>;
+
+    /// Signs `signing_input = base64url(header) "." base64url(payload)`.
+    ///
+    /// Preconditions:
+    /// - `alg` is within the [`SigningAlg`] allowlist and matches `kid`.
+    /// - `signing_input` is already base64url-encoded by the pure core.
+    ///
+    /// Effects:
+    /// 1. Computes a raw signature over `signing_input` with the active key.
+    ///
+    /// Does not:
+    /// - Build headers or claims.
+    /// - Assemble the compact JWS or base64url-encode the signature.
+    ///
+    /// Returns:
+    /// - ES256: JOSE `r || s`. RS256: PKCS#1 v1.5 signature bytes.
+    async fn sign(
+        &self,
+        kid: &KeyId,
+        alg: SigningAlg,
+        signing_input: &[u8],
+    ) -> AuthResult<Vec<u8>>;
+}
+
 /// Runtime capabilities required by portable auth flows.
 ///
 /// The generic shape keeps Worker adapters free to store local `!Send` values.
@@ -224,11 +348,16 @@ pub type DynIdGenerator = dyn IdGenerator;
 pub type DynSessionTokenGenerator = dyn SessionTokenGenerator;
 pub type DynOAuthHttpClient = dyn OAuthHttpClient;
 
+pub type DynJwtSigner = dyn JwtSigner;
+pub type DynJwksProvider = dyn JwksProvider;
+
 pub type NativeDynClock = dyn Clock + Send + Sync;
 pub type NativeDynSecureRandom = dyn SecureRandom + Send + Sync;
 pub type NativeDynIdGenerator = dyn IdGenerator + Send + Sync;
 pub type NativeDynSessionTokenGenerator = dyn SessionTokenGenerator + Send + Sync;
 pub type NativeDynOAuthHttpClient = dyn OAuthHttpClient + Send + Sync;
+pub type NativeDynJwtSigner = dyn JwtSigner + Send + Sync;
+pub type NativeDynJwksProvider = dyn JwksProvider + Send + Sync;
 
 /// Shared runtime capability set used by [`crate::config::AuthConfig`].
 ///
@@ -242,6 +371,11 @@ pub struct AuthRuntimeCapabilities {
     pub id_generator: SharedIdGenerator,
     pub session_tokens: SharedSessionTokenGenerator,
     pub oauth_http: SharedOAuthHttpClient,
+    /// OIDC id_token signer. Defaults to an [`UnavailableJwtSigner`] stub so
+    /// non-OIDC native and Worker assemblies are not forced to inject one.
+    pub jwt_signer: SharedJwtSigner,
+    /// OIDC JWKS publisher. Defaults to an [`UnavailableJwksProvider`] stub.
+    pub jwks_provider: SharedJwksProvider,
 }
 
 impl AuthRuntimeCapabilities {
@@ -258,7 +392,23 @@ impl AuthRuntimeCapabilities {
             id_generator,
             session_tokens,
             oauth_http,
+            jwt_signer: unavailable_jwt_signer(),
+            jwks_provider: unavailable_jwks_provider(),
         }
+    }
+
+    /// Installs an OIDC id_token signer. Only OIDC provider assemblies call this.
+    #[must_use]
+    pub fn with_jwt_signer(mut self, jwt_signer: SharedJwtSigner) -> Self {
+        self.jwt_signer = jwt_signer;
+        self
+    }
+
+    /// Installs an OIDC JWKS publisher. Only OIDC provider assemblies call this.
+    #[must_use]
+    pub fn with_jwks_provider(mut self, jwks_provider: SharedJwksProvider) -> Self {
+        self.jwks_provider = jwks_provider;
+        self
     }
 }
 
@@ -337,6 +487,61 @@ impl OAuthHttpClient for UnavailableOAuthHttpClient {
             "OAuth HTTP requests require an injected OAuthHttpClient capability",
         ))
     }
+}
+
+/// Default [`JwtSigner`] stub used when no OIDC signer is injected.
+#[derive(Debug, Clone, Copy)]
+pub struct UnavailableJwtSigner;
+
+#[cfg_attr(feature = "local-futures", async_trait(?Send))]
+#[cfg_attr(not(feature = "local-futures"), async_trait)]
+impl JwtSigner for UnavailableJwtSigner {
+    fn active_key(&self) -> AuthResult<(KeyId, SigningAlg)> {
+        Err(AuthError::config(
+            "JWT signing requires an injected JwtSigner capability",
+        ))
+    }
+
+    async fn sign(
+        &self,
+        _kid: &KeyId,
+        _alg: SigningAlg,
+        _signing_input: &[u8],
+    ) -> AuthResult<Vec<u8>> {
+        Err(AuthError::config(
+            "JWT signing requires an injected JwtSigner capability",
+        ))
+    }
+}
+
+/// Default [`JwksProvider`] stub used when no OIDC JWKS source is injected.
+#[derive(Debug, Clone, Copy)]
+pub struct UnavailableJwksProvider;
+
+impl JwksProvider for UnavailableJwksProvider {
+    fn jwks(&self) -> AuthResult<JwkSet> {
+        Err(AuthError::config(
+            "JWKS publication requires an injected JwksProvider capability",
+        ))
+    }
+}
+
+#[cfg(not(feature = "local-futures"))]
+fn unavailable_jwt_signer() -> SharedJwtSigner {
+    std::sync::Arc::new(UnavailableJwtSigner)
+}
+#[cfg(feature = "local-futures")]
+fn unavailable_jwt_signer() -> SharedJwtSigner {
+    std::rc::Rc::new(UnavailableJwtSigner)
+}
+
+#[cfg(not(feature = "local-futures"))]
+fn unavailable_jwks_provider() -> SharedJwksProvider {
+    std::sync::Arc::new(UnavailableJwksProvider)
+}
+#[cfg(feature = "local-futures")]
+fn unavailable_jwks_provider() -> SharedJwksProvider {
+    std::rc::Rc::new(UnavailableJwksProvider)
 }
 
 pub type LocalRuntimeCapabilitiesDyn = RuntimeCapabilities<

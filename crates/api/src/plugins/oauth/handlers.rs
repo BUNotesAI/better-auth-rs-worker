@@ -492,6 +492,7 @@ pub async fn handle_social_sign_in<DB: DatabaseAdapter>(
     AuthResponse::json(200, &response).map_err(AuthError::from)
 }
 
+#[allow(clippy::too_many_lines)] // Exception: pre-existing oversized function, refactor outside task_6f08dbb6 scope.
 pub(crate) async fn callback_core<DB: DatabaseAdapter>(
     code: &str,
     state_param: &str,
