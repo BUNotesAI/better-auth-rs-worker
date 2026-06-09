@@ -19,6 +19,8 @@ pub mod error;
 pub mod extractors;
 pub mod hooks;
 pub mod middleware;
+#[cfg(feature = "oidc-provider")]
+pub mod oidc;
 pub mod openapi;
 pub mod plugin;
 pub mod session;
@@ -43,13 +45,22 @@ pub use adapters::{
 #[cfg(feature = "sqlx-postgres")]
 pub use adapters::{SqlxAdapter, SqlxEntity};
 pub use capabilities::{
-    AuthRuntimeCapabilities, Clock, DynClock, DynIdGenerator, DynOAuthHttpClient, DynSecureRandom,
-    DynSessionTokenGenerator, IdGenerator, IdKind, LocalRuntimeCapabilitiesDyn, NativeDynClock,
-    NativeDynIdGenerator, NativeDynOAuthHttpClient, NativeDynSecureRandom,
-    NativeDynSessionTokenGenerator, NativeRuntimeCapabilitiesDyn, OAuthHttpClient,
-    OAuthHttpRequest, OAuthHttpResponse, RuntimeCapabilities, SecureRandom, SessionTokenGenerator,
-    SharedClock, SharedIdGenerator, SharedOAuthHttpClient, SharedSecureRandom,
-    SharedSessionTokenGenerator,
+    AuthRuntimeCapabilities, Clock, DynClock, DynIdGenerator, DynJwksProvider, DynJwtSigner,
+    DynOAuthHttpClient, DynSecureRandom, DynSessionTokenGenerator, IdGenerator, IdKind, Jwk, JwkSet,
+    JwksProvider, JwtSigner, KeyId, LocalRuntimeCapabilitiesDyn, NativeDynClock,
+    NativeDynIdGenerator, NativeDynJwksProvider, NativeDynJwtSigner, NativeDynOAuthHttpClient,
+    NativeDynSecureRandom, NativeDynSessionTokenGenerator, NativeRuntimeCapabilitiesDyn,
+    OAuthHttpClient, OAuthHttpRequest, OAuthHttpResponse, RuntimeCapabilities, SecureRandom,
+    SessionTokenGenerator, SharedClock, SharedIdGenerator, SharedJwksProvider, SharedJwtSigner,
+    SharedOAuthHttpClient, SharedSecureRandom, SharedSessionTokenGenerator, SigningAlg,
+};
+#[cfg(feature = "oidc-provider")]
+pub use oidc::{
+    AccessToken, AccessTokenHash, AccessTokenOps, AccessTokenRecord, AuthorizationCode,
+    AuthorizationCodeOps, AuthorizationCodeRecord, ClientId, ClientType, CodeChallenge,
+    CodeChallengeMethod, CodeVerifier, GrantType, Issuer, NewAccessToken, NewAuthorizationCode,
+    Nonce, OAuthClient, OAuthClientOps, OidcProviderStore, RedirectUri, ResponseType, Scope,
+    ScopeSet, State, SubjectId, TokenEndpointAuthMethod, TokenType,
 };
 pub use config::{
     AccountConfig, AccountLinkingConfig, AdvancedConfig, AdvancedDatabaseConfig, Argon2Config,
