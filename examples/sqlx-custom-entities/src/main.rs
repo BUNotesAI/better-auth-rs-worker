@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! # SQLx Custom Entities Example
 //!
 //! A complete Axum web server demonstrating custom entity types with PostgreSQL.

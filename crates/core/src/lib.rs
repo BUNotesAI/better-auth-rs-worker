@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! # Better Auth Core
 //!
 //! Core abstractions for the Better Auth authentication framework.

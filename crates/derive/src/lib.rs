@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! Derive macros for better-auth entity traits.
 //!
 //! Provides `#[derive(AuthUser)]`, `#[derive(AuthSession)]`, etc. to auto-implement

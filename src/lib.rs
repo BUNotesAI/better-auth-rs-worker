@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! # Better Auth - Rust
 //!
 //! A comprehensive authentication framework for Rust, inspired by Better-Auth.

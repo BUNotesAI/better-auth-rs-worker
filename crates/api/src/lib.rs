@@ -1,3 +1,4 @@
+#![warn(clippy::too_many_lines)]
 //! # Better Auth API
 //!
 //! Plugin implementations for the Better Auth authentication framework.
