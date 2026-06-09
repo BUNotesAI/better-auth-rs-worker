@@ -20,6 +20,7 @@ A Cloudflare Worker + D1 focused public fork of Better Auth RS. The project keep
 - **D1 persistence boundary** — `D1DatabaseAdapter` maps core auth records onto Cloudflare D1 prepared statements
 - **Runnable Worker example** — [`examples/cloudflare-worker/`](examples/cloudflare-worker/) includes Wrangler config, D1 binding, local secrets template, route wiring, and deployment steps
 - **Worker runtime capabilities** — clock, secure random, IDs, session tokens, and OAuth HTTP are injected explicitly so Worker builds avoid native runtime assumptions
+- **OIDC provider (optional)** — a standards-aligned OpenID Connect provider / OAuth2 authorization server behind the `oidc-provider` feature, with **native (SQLx/Postgres) + Worker (D1) storage parity**, explicit signing/JWKS ports, PKCE-required public clients, hash-at-rest access tokens, and single-use authorization codes. The portable path compiles to `wasm32-unknown-unknown` with no `ring`/`openssl`/`sqlx` in the dependency tree
 - **Public-repo hygiene** — real D1 ids, `.dev.vars`, `.wrangler/`, generated Worker builds, local Wrangler configs, IDE state, and harness-local files are ignored
 
 ## Features
@@ -30,6 +31,7 @@ A Cloudflare Worker + D1 focused public fork of Better Auth RS. The project keep
 - **Database Agnostic** — in-memory for development, PostgreSQL for production
 - **Framework Integration** — first-class Axum support with session extractors
 - **Cloudflare Worker Boundary** — Wasm-friendly Worker adapter and D1 persistence boundary
+- **OIDC Provider (optional)** — act as an OpenID Connect provider / OAuth2 authorization server (native + Worker), feature-gated behind `oidc-provider`
 - **OpenAPI** — auto-generated API specification
 - **Middleware** — CSRF, CORS, rate limiting, body size limits
 - **Database Hooks** — intercept create/update/delete operations
@@ -170,6 +172,47 @@ cargo test -p better-auth-worker --features api-route-tests --lib
 cargo check --manifest-path examples/cloudflare-worker/Cargo.toml --target wasm32-unknown-unknown
 ```
 
+## OIDC Provider (optional)
+
+Behind the `oidc-provider` feature, Better Auth RS can act as a standards-aligned
+**OpenID Connect provider / OAuth2 authorization server** (provider side), as a
+general library capability that is not bound to any single downstream app.
+
+- **Endpoints** — discovery (`/.well-known/openid-configuration`), JWKS,
+  authorize, token, and userinfo, exposed as a hand-written `AuthPlugin`.
+- **Standards** — OIDC Core, RFC 6749, PKCE (RFC 7636, S256 only), RFC 8414
+  discovery, RFC 7517 JWKS. Pure protocol decisions are separated from effects.
+- **Secure defaults** — public clients must use PKCE; authorization codes are
+  single-use via an atomic `DELETE … RETURNING` consume; access tokens are stored
+  as hashes only (the raw token is returned once); requests cannot exceed a
+  client's registered `allowed_scopes`; an invalid/unregistered `redirect_uri` is
+  never redirected to; the token endpoint authenticates the client before
+  consuming the code.
+- **Native + Worker parity** — storage is an `OidcProviderStore` port with a
+  native SQLx/Postgres adapter and a Cloudflare D1 adapter; id_token signing is a
+  `JwtSigner` port (native `jsonwebtoken` ES256/RS256 is feature-gated off the
+  Wasm path). Migrations: `migrations/006_*` (Postgres) and `migrations/d1/0002_*`
+  (D1/SQLite).
+- **Wasm-clean** — the provider compiles to `wasm32-unknown-unknown` on the
+  Worker/portable path with no `ring`/`openssl`/`sqlx` in the dependency tree:
+
+```bash
+# native build with the OIDC provider
+cargo build -p better-auth-api --features oidc-provider
+# Worker/portable path compiles to wasm with a clean dependency tree
+cargo build -p better-auth-worker --target wasm32-unknown-unknown \
+  --no-default-features --features local-futures,oidc-provider
+cargo tree -p better-auth-worker --target wasm32-unknown-unknown \
+  --no-default-features --features local-futures,oidc-provider -e normal \
+  | grep -iE "ring|openssl|sqlx" || echo "clean"
+```
+
+> **Note:** the Worker WebCrypto `JwtSigner` adapter (signing id_tokens with
+> SubtleCrypto in the Worker runtime) is not yet implemented; the `JwtSigner`
+> port is ready and native signing/JWKS verification is covered. Until then,
+> deploy id_token signing on the native path or supply a custom Worker
+> `JwtSigner`.
+
 ## Plugins
 
 Better Auth RS ships with a rich set of plugins. Enable only what you need:
@@ -188,6 +231,7 @@ Better Auth RS ships with a rich set of plugins. Enable only what you need:
 | **API Key** | API key generation, rotation, and revocation |
 | **Passkey** | WebAuthn passkey authentication |
 | **Device Authorization** | Device flow for TVs, consoles, CLIs, and other input-constrained clients |
+| **OIDC Provider** | Be an OpenID Connect provider / OAuth2 authorization server — discovery, JWKS, authorize, token, and userinfo endpoints; PKCE (S256), single-use codes, hash-at-rest access tokens; native + Worker storage parity (feature `oidc-provider`) |
 
 > See the [Plugins documentation](docs/content/docs/concepts/plugins.mdx) for usage details.
 
@@ -199,12 +243,14 @@ Better Auth RS ships with a rich set of plugins. Enable only what you need:
 | `derive` | Derive macros for custom entity types (`AuthUser`, `MemoryUser`, etc.) |
 | `local-futures` | Worker-style local futures using `Rc` / `?Send`; build separately from `axum` |
 | `sqlx-postgres` | PostgreSQL database support via SQLx |
+| `oidc-provider` | OpenID Connect provider / OAuth2 authorization-server capability (discovery / JWKS / authorize / token / userinfo); additive — default runtime ships `Unavailable` signer/JWKS stubs |
 
 The `better-auth-worker` crate has its own feature flags:
 
 | Feature | Description |
 |---------|-------------|
 | `local-futures` | Enables Worker-local `?Send` futures and `Rc` runtime capability ports |
+| `oidc-provider` | D1 `OidcProviderStore` (client / authorization-code / access-token persistence) for the Worker OIDC provider path |
 | `api-route-tests` | Internal test-only feature for route smoke tests with `better-auth-api` |
 
 ## Crate Structure
