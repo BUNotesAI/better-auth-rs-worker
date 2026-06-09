@@ -66,6 +66,27 @@ pub fn parse_requested_scopes(raw: &str) -> Result<ScopeSet, OAuthError> {
     ScopeSet::parse(raw).map_err(|_| OAuthError::invalid_scope("the openid scope is required"))
 }
 
+/// Enforces that every requested scope is registered for the client.
+///
+/// A registered client may only request scopes within its `allowed_scopes`;
+/// requesting any other scope is `invalid_scope`. This stops a client from
+/// escalating beyond its registered scope set (and thus from obtaining
+/// claims it was never granted).
+pub fn validate_allowed_scopes(
+    client: &OAuthClient,
+    requested: &ScopeSet,
+) -> Result<(), OAuthError> {
+    for scope in requested.iter() {
+        if !client.allowed_scopes.contains(scope.as_str()) {
+            return Err(OAuthError::invalid_scope(format!(
+                "scope is not allowed for this client: {}",
+                scope.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Enforces that public clients present a PKCE challenge at the authorize step.
 pub fn require_pkce_at_authorize(
     client: &OAuthClient,

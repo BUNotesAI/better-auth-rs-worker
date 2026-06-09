@@ -11,7 +11,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
 
-use better_auth_core::{AccessToken, AccessTokenHash, AuthResult, SecureRandom};
+use better_auth_core::{AccessToken, AccessTokenHash, AuthResult, AuthorizationCode, SecureRandom};
 
 /// Default authorization-code lifetime in seconds.
 pub const DEFAULT_CODE_TTL_SECONDS: i64 = 60;
@@ -20,6 +20,27 @@ pub const DEFAULT_ACCESS_TOKEN_TTL_SECONDS: i64 = 600;
 
 /// Entropy drawn from `SecureRandom` for an opaque access token.
 const ACCESS_TOKEN_ENTROPY_BYTES: usize = 32;
+/// Entropy drawn from `SecureRandom` for an opaque authorization code.
+const AUTHORIZATION_CODE_ENTROPY_BYTES: usize = 32;
+
+/// Generates a high-entropy opaque authorization code.
+///
+/// Preconditions:
+/// - `secure_random` is the injected runtime entropy source.
+///
+/// Effects:
+/// 1. Draws [`AUTHORIZATION_CODE_ENTROPY_BYTES`] from `secure_random`.
+///
+/// Authorization codes are single-use and short-lived; they are stored as-is and
+/// removed by the atomic consume at the token endpoint, so no at-rest hash is
+/// needed (unlike access tokens).
+pub fn generate_authorization_code(
+    secure_random: &dyn SecureRandom,
+) -> AuthResult<AuthorizationCode> {
+    let mut bytes = [0u8; AUTHORIZATION_CODE_ENTROPY_BYTES];
+    secure_random.fill_bytes(&mut bytes)?;
+    Ok(AuthorizationCode::from_raw(URL_SAFE_NO_PAD.encode(bytes)))
+}
 
 /// Generates a high-entropy opaque access token and its at-rest hash.
 ///

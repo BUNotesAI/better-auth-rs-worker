@@ -1,7 +1,8 @@
 -- Better Auth Worker D1 (SQLite) OIDC provider tables. Parity with the native
--- PostgreSQL migrations/006_create_oidc_provider_tables.sql. No PostgreSQL-only
--- syntax: epoch INTEGER timestamps (set by the injected clock, not NOW()), TEXT
--- for JSON, no TIMESTAMPTZ/JSONB/$1 placeholders.
+-- PostgreSQL migration migrations/006_create_oidc_provider_tables.sql, using only
+-- D1/SQLite-safe syntax: epoch INTEGER timestamps set by the injected clock, TEXT
+-- columns for JSON payloads, and no Postgres-only types, casts, time functions,
+-- or positional bind placeholders.
 
 CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id TEXT PRIMARY KEY,
