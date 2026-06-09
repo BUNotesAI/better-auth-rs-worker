@@ -526,6 +526,29 @@ impl JwksProvider for UnavailableJwksProvider {
     }
 }
 
+/// A [`JwksProvider`] returning a static, pre-built public JWK set.
+///
+/// The public JWK (kid/alg/crv/x/y) is built by the host (e.g. from a signing
+/// key's public coordinates) and injected here; this adapter just publishes it.
+/// It is pure data with no crypto dependency, so it is available on every
+/// target including wasm/Worker.
+pub struct StaticJwksProvider {
+    jwks: JwkSet,
+}
+
+impl StaticJwksProvider {
+    #[must_use]
+    pub fn new(jwks: JwkSet) -> Self {
+        Self { jwks }
+    }
+}
+
+impl JwksProvider for StaticJwksProvider {
+    fn jwks(&self) -> AuthResult<JwkSet> {
+        Ok(self.jwks.clone())
+    }
+}
+
 #[cfg(not(feature = "local-futures"))]
 fn unavailable_jwt_signer() -> SharedJwtSigner {
     std::sync::Arc::new(UnavailableJwtSigner)

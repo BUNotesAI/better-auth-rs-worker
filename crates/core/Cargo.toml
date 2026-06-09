@@ -36,6 +36,8 @@ argon2 = { workspace = true, optional = true }
 password-hash = { version = "0.5", optional = true, features = ["getrandom"] }
 base64 = { workspace = true }
 jsonwebtoken = { workspace = true, optional = true }
+# Portable ES256 signing (pure Rust, wasm-friendly, no ring/openssl)
+p256 = { version = "0.13", optional = true }
 
 # Database (optional)
 sqlx = { workspace = true, optional = true }
@@ -60,6 +62,8 @@ local-futures = []
 derive = ["dep:better-auth-derive"]
 jwt = ["dep:jsonwebtoken"]
 oidc-provider = []
+# Portable ES256 JwtSigner (pure Rust p256/ecdsa; works on native and wasm/Worker)
+p256-signer = ["dep:p256", "oidc-provider"]
 password-argon2 = ["dep:argon2", "dep:password-hash"]
 native-id = ["dep:uuid", "uuid/v4"]
 sqlx-postgres = ["dep:sqlx", "native-id"]

@@ -24,3 +24,6 @@ default = []
 api-route-tests = ["dep:better-auth-api"]
 local-futures = ["better-auth-core/local-futures", "better-auth-api?/local-futures"]
 oidc-provider = ["better-auth-core/oidc-provider", "better-auth-api?/oidc-provider"]
+# Portable ES256 signer (pure Rust p256) for the Worker OIDC id_token signing path.
+# The wasm binary must also enable `getrandom/js` (p256 pulls getrandom).
+p256-signer = ["better-auth-core/p256-signer", "oidc-provider"]

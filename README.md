@@ -189,10 +189,13 @@ general library capability that is not bound to any single downstream app.
   never redirected to; the token endpoint authenticates the client before
   consuming the code.
 - **Native + Worker parity** — storage is an `OidcProviderStore` port with a
-  native SQLx/Postgres adapter and a Cloudflare D1 adapter; id_token signing is a
-  `JwtSigner` port (native `jsonwebtoken` ES256/RS256 is feature-gated off the
-  Wasm path). Migrations: `migrations/006_*` (Postgres) and `migrations/d1/0002_*`
-  (D1/SQLite).
+  native SQLx/Postgres adapter and a Cloudflare D1 adapter. id_token signing is a
+  `JwtSigner` port with two implementations: `P256JwtSigner` (pure-Rust ES256 via
+  `p256`, deterministic RFC 6979, **works on both native and wasm/Worker**, feature
+  `p256-signer`) and `NativeJwtSigner` (native-only `jsonwebtoken`, ES256/RS256,
+  feature `jwt`, kept off the Wasm path). JWKS is published via `StaticJwksProvider`
+  (e.g. from `P256JwtSigner::jwks()`). Migrations: `migrations/006_*` (Postgres)
+  and `migrations/d1/0002_*` (D1/SQLite).
 - **Wasm-clean** — the provider compiles to `wasm32-unknown-unknown` on the
   Worker/portable path with no `ring`/`openssl`/`sqlx` in the dependency tree:
 
@@ -207,11 +210,12 @@ cargo tree -p better-auth-worker --target wasm32-unknown-unknown \
   | grep -iE "ring|openssl|sqlx" || echo "clean"
 ```
 
-> **Note:** the Worker WebCrypto `JwtSigner` adapter (signing id_tokens with
-> SubtleCrypto in the Worker runtime) is not yet implemented; the `JwtSigner`
-> port is ready and native signing/JWKS verification is covered. Until then,
-> deploy id_token signing on the native path or supply a custom Worker
-> `JwtSigner`.
+For id_token signing on Workers, enable the `p256-signer` feature and inject
+`P256JwtSigner` into the runtime capabilities — it is pure Rust (no WebCrypto
+plumbing, no `ring`/`openssl`), compiles into the Worker cdylib, and signs the
+same way on native and wasm. The wasm binary must also enable `getrandom/js`
+(the example does). A WebCrypto-backed signer with a non-extractable key remains
+an optional future addition for stricter key hygiene.
 
 ## Plugins
 
@@ -244,12 +248,15 @@ Better Auth RS ships with a rich set of plugins. Enable only what you need:
 | `local-futures` | Worker-style local futures using `Rc` / `?Send`; build separately from `axum` |
 | `sqlx-postgres` | PostgreSQL database support via SQLx |
 | `oidc-provider` | OpenID Connect provider / OAuth2 authorization-server capability (discovery / JWKS / authorize / token / userinfo); additive — default runtime ships `Unavailable` signer/JWKS stubs |
+| `jwt` | Native `NativeJwtSigner` (ES256/RS256 via `jsonwebtoken`); native-only, kept off the Wasm path |
+| `p256-signer` | Portable `P256JwtSigner` (pure-Rust ES256 via `p256`); works on native **and** wasm/Worker; implies `oidc-provider` |
 
 The `better-auth-worker` crate has its own feature flags:
 
 | Feature | Description |
 |---------|-------------|
 | `local-futures` | Enables Worker-local `?Send` futures and `Rc` runtime capability ports |
+| `p256-signer` | Re-exports the portable `P256JwtSigner` for the Worker OIDC signing path (implies `oidc-provider`) |
 | `oidc-provider` | D1 `OidcProviderStore` (client / authorization-code / access-token persistence) for the Worker OIDC provider path |
 | `api-route-tests` | Internal test-only feature for route smoke tests with `better-auth-api` |
 

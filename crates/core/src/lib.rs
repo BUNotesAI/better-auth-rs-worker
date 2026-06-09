@@ -53,6 +53,7 @@ pub use capabilities::{
     OAuthHttpClient, OAuthHttpRequest, OAuthHttpResponse, RuntimeCapabilities, SecureRandom,
     SessionTokenGenerator, SharedClock, SharedIdGenerator, SharedJwksProvider, SharedJwtSigner,
     SharedOAuthHttpClient, SharedSecureRandom, SharedSessionTokenGenerator, SigningAlg,
+    StaticJwksProvider,
 };
 #[cfg(feature = "oidc-provider")]
 pub use oidc::{
@@ -62,6 +63,8 @@ pub use oidc::{
     Nonce, OAuthClient, OAuthClientOps, OidcProviderStore, RedirectUri, ResponseType, Scope,
     ScopeSet, State, SubjectId, TokenEndpointAuthMethod, TokenType,
 };
+#[cfg(feature = "p256-signer")]
+pub use oidc::P256JwtSigner;
 pub use config::{
     AccountConfig, AccountLinkingConfig, AdvancedConfig, AdvancedDatabaseConfig, Argon2Config,
     AuthConfig, CookieAttributes, CookieCacheConfig, CookieCacheStrategy, CookieOverride,

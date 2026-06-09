@@ -10,10 +10,14 @@
 pub mod model;
 #[cfg(feature = "jwt")]
 pub mod native_signer;
+#[cfg(feature = "p256-signer")]
+pub mod portable_signer;
 pub mod store;
 
 #[cfg(feature = "jwt")]
-pub use native_signer::{NativeJwtSigner, StaticJwksProvider};
+pub use native_signer::NativeJwtSigner;
+#[cfg(feature = "p256-signer")]
+pub use portable_signer::P256JwtSigner;
 pub use model::{
     AccessToken, AccessTokenHash, AccessTokenRecord, AuthorizationCode, AuthorizationCodeRecord,
     ClientId, ClientType, CodeChallenge, CodeChallengeMethod, CodeVerifier, GrantType, Issuer,

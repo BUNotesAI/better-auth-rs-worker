@@ -12,7 +12,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{Algorithm, EncodingKey};
 
-use crate::capabilities::{JwkSet, JwksProvider, JwtSigner, KeyId, SigningAlg};
+use crate::capabilities::{JwtSigner, KeyId, SigningAlg};
 use crate::error::{AuthError, AuthResult};
 
 fn jwt_algorithm(alg: SigningAlg) -> Algorithm {
@@ -62,26 +62,6 @@ impl JwtSigner for NativeJwtSigner {
     }
 }
 
-/// A [`JwksProvider`] returning a static, pre-built public JWK set.
-///
-/// The public JWK (kid/alg/crv/x/y) is constructed by the host/example layer
-/// from the signing key and injected here; this adapter just publishes it.
-pub struct StaticJwksProvider {
-    jwks: JwkSet,
-}
-
-impl StaticJwksProvider {
-    #[must_use]
-    pub fn new(jwks: JwkSet) -> Self {
-        Self { jwks }
-    }
-}
-
-impl JwksProvider for StaticJwksProvider {
-    fn jwks(&self) -> AuthResult<JwkSet> {
-        Ok(self.jwks.clone())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -125,7 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_jwks_verify_smoke_native() {
-        use crate::capabilities::Jwk;
+        use crate::capabilities::{Jwk, JwkSet, JwksProvider, StaticJwksProvider};
 
         // The published JWK (x/y) for the test key. An OIDC relying party uses
         // exactly this JWKS output to verify issued id_tokens, so this is the
